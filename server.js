@@ -1,21 +1,17 @@
-// server.js
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import "./bot.js"; // starts your Telegram bot
 
 dotenv.config();
-const app = express();
 
+const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Simple test route
 app.get("/", (req, res) => {
-  res.send("🚀 Telegram Bot Server Running Successfully!");
+  res.send("✅ Clean Naija Bot is running successfully!");
 });
 
-// Import bot logic
-import "./bot.js"; // Make sure bot.js is in same folder
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
