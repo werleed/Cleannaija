@@ -81,6 +81,5 @@ bot.on('contact', async (ctx) => {
   if (res.success) return ctx.reply('OTP sent to ' + user.phone + '. Enter the 6-digit code (test mode: 123456).');
   return ctx.reply('Failed to send OTP: ' + (res.error||'unknown'));
 });
-# remaining file continued below due to size
-
-// Continue implementation is in the repository; deploy this file.
+// something  // ✅ correct
+const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
