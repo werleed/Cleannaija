@@ -13,3 +13,9 @@
     "twilio": "^4.21.0"
   }
 }
+{
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
