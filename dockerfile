@@ -4,15 +4,17 @@ FROM node:18
 # Create app directory
 WORKDIR /app
 
-# Copy package files and install production deps
+# Copy package.json and package-lock if present
 COPY package*.json ./
-RUN npm ci --omit=dev
 
-# Copy source
+# Install dependencies (production)
+RUN npm install --omit=dev
+
+# Copy all source code
 COPY . .
 
-# Expose port (webhook mode)
-EXPOSE 8080
+# Expose port for keep-alive endpoint (Railway uses $PORT env)
+EXPOSE 3000
 
 # Start the bot
 CMD ["npm", "start"]
