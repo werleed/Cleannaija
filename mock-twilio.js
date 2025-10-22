@@ -1,37 +1,34 @@
-/**
- * mock-twilio.js
- * Simple offline verification service for development.
- * - send(phone) -> stores a code in-memory and returns success
- * - check(phone, code) -> validates code
- *
- * This is intentionally simple and ephemeral (in-memory).
- */
-
-const codes = new Map();
-
-function genCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
+// mock-twilio.js
+// Simple offline mock verify service. Stores OTPs in-memory and in ./data/otp_store.json
+const fs = require("fs");
+const path = require("path");
+const DATA_DIR = path.resolve(__dirname, "data");
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const OTP_FILE = path.join(DATA_DIR, "otp_store.json");
+const read = () => {
+  try { return JSON.parse(fs.readFileSync(OTP_FILE)); } catch (e) { return {}; }
+};
+const write = (o) => fs.writeFileSync(OTP_FILE, JSON.stringify(o, null, 2));
 
 module.exports = {
   send: async (phone) => {
-    const code = genCode();
-    codes.set(phone, { code, ts: Date.now() });
-    // In dev we log but do not send SMS
-    console.log(`[mock-twilio] Sent code ${code} to ${phone} (mock).`);
-    return { success: true, sid: `mock-${Date.now()}` };
+    // generate 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const otps = read();
+    otps[phone] = { code, ts: Date.now() };
+    write(otps);
+    console.log(`[mock-twilio] OTP for ${phone}: ${code}`);
+    // simulate async Twilio response
+    return { success: true, sid: `mock_${Date.now()}`, codeSent: code };
   },
   check: async (phone, code) => {
-    const entry = codes.get(phone);
-    if (!entry) return { success: false };
-    // expire after 10 minutes
-    const age = Date.now() - (entry.ts || 0);
-    if (age > 10 * 60 * 1000) {
-      codes.delete(phone);
-      return { success: false, reason: "expired" };
-    }
-    const ok = entry.code === code.toString();
-    if (ok) codes.delete(phone);
-    return { success: ok };
-  },
+    const otps = read();
+    const entry = otps[phone];
+    if (!entry) return { success: false, reason: "no_otp" };
+    // otp expires after 10 minutes
+    if (Date.now() - entry.ts > 10 * 60 * 1000) { delete otps[phone]; write(otps); return { success: false, reason: "expired" }; }
+    const ok = entry.code === code;
+    if (ok) { delete otps[phone]; write(otps); }
+    return { success: ok, reason: ok ? "approved" : "wrong_code" };
+  }
 };
