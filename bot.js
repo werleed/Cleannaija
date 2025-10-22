@@ -247,21 +247,27 @@ bot.on('message', async (m) => {
     return bot.sendMessage(chatId, `Withdrawals: ${s.withdrawals_enabled}`);
   }
 });
-
-// --- Express Server / Keep Alive ---
+// --- Keep bot alive on Railway ---
+const express = require('express');
+const fetch = require('node-fetch');
 const app = express();
-app.get('/', (req, res) => res.send('🤖 Clean Naija Bot Running'));
-app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.get('/', (req, res) => {
+  res.send('🤖 Bot is live and healthy!');
+});
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server live on ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+
+  // Send periodic self-pings to keep container alive
   setInterval(() => {
-    fetch(`http://localhost:${PORT}/health`).then(() => console.log('✅ Keepalive')).catch(() => {});
-  }, 240000);
+    fetch(`http://localhost:${PORT}/health`)
+      .then(() => console.log('✅ Keep-alive ping sent'))
+      .catch((err) => console.log('⚠️ Keep-alive failed:', err.message));
+  }, 240000); // every 4 minutes
 });
-// --- Graceful Shutdown ---
-const shutdown = () => { console.log('🛑 Shutting down...'); bot.stopPolling(); process.exit(0); };
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-process.on('unhandledRejection', (r) => console.error('Unhandled Rejection:', r));
-process.on('uncaughtException', (e) => console.error('Uncaught Exception:', e));
