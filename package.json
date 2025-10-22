@@ -1,16 +1,20 @@
 {
-  "name": "clean-naija-bot",
+  "name": "werleed-bot",
   "version": "1.0.0",
-  "description": "Telegram AI Waste Recycling Bot with Twilio OTP verification",
-  "main": "server.js",
+  "description": "Telegram bot with Twilio OTP verification",
+  "main": "bot.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "axios": "^1.6.0",
     "dotenv": "^16.3.1",
-    "cors": "^2.8.5",
-    "body-parser": "^1.20.2",
-    "node-fetch": "^3.3.2"
+    "express": "^4.18.2",
+    "twilio": "^4.18.0",
+    "node-telegram-bot-api": "^0.61.0",
+    "phonenumbers": "^1.1.1"
+  },
+  "engines": {
+    "node": ">=18.x"
   }
 }
