@@ -1,26 +1,26 @@
-# Use Node 18 LTS (alpine)
+# Use Node.js 18 LTS
 FROM node:18-alpine
 
-# set workdir
+# Create app directory
 WORKDIR /app
 
-# Install minimal build deps for some npm packages if necessary
-# jimp and these deps usually work without extra packages but we include them quietly
-RUN apk add --no-cache bash build-base
+# Copy package.json and package-lock if present
+COPY package*.json ./
 
-# Copy package files and install
-COPY package.json package-lock.json* ./
-RUN npm install --no-optional --production
+# Install dependencies
+RUN npm install --omit=dev
 
-# Copy app
+# Copy application code
 COPY . .
 
-# Create data dir
-RUN mkdir -p /app/data
-VOLUME [ "/app/data" ]
+# Ensure data dir exists
+RUN mkdir -p data
 
-# Expose port used by Railway/Health checks
+# Expose port for health checks and admin UI
 EXPOSE 8080
 
-# start
+# Default env (can be overridden in Railway)
+ENV PORT=8080
+
+# Start
 CMD ["npm", "start"]
