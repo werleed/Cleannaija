@@ -1,569 +1,488 @@
 // bot.js
-// Clean-Naija Bot - Node (CommonJS) ready for Node 18
 require('dotenv').config();
 const fs = require('fs');
+const fsExtra = require('fs-extra');
 const path = require('path');
 const express = require('express');
-const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
-const { parsePhoneNumberFromString } = require('libphonenumber-js');
 const twilio = require('twilio');
 
-const PORT = process.env.PORT || 3000;
+// --- Environment / config ---
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN;
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID ? parseInt(process.env.ADMIN_TELEGRAM_ID, 10) : null;
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_VERIFY_SID = process.env.TWILIO_VERIFY_SID;
 
-// --- Environment variables (required) ---
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN || null;
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID || null;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || null;
-const TWILIO_VERIFY_SID = process.env.TWILIO_VERIFY_SID || null;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || process.env.ADMIN_TELEGRAM_IDS || ''; // comma separated
-
-// Helpful logs for missing vars (bot will not crash; will disable specific features gracefully)
-if (!TELEGRAM_TOKEN) console.error('⚠️ TELEGRAM_TOKEN / BOT_TOKEN not set - the Telegram bot will not start polling.');
+if (!TELEGRAM_TOKEN) {
+  console.error('FATAL: TELEGRAM_TOKEN or BOT_TOKEN environment variable missing.');
+  process.exit(1);
+}
 if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_VERIFY_SID) {
-  console.warn('⚠️ Twilio environment variables missing. OTP sending or verification WILL FAIL until configured.');
+  console.warn('Warning: Twilio credentials missing. OTP features will fail until provided.');
 }
 
-// --- Twilio client (if credentials exist) ---
+// --- Paths and auto-create data folders/files ---
+const DATA_DIR = path.join(__dirname, 'data');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+fsExtra.ensureDirSync(DATA_DIR);
+fsExtra.ensureDirSync(UPLOADS_DIR);
+
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]', 'utf8');
+if (!fs.existsSync(SETTINGS_FILE)) {
+  const defaultSettings = {
+    verification_enabled: true,
+    withdrawals_enabled: true,
+    language_default: 'en'
+  };
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(defaultSettings, null, 2), 'utf8');
+}
+
+// --- Storage helpers ---
+const loadJSON = (p) => {
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8') || 'null') || {};
+  } catch (e) {
+    console.error('Failed to read JSON', p, e);
+    return {};
+  }
+};
+const saveJSON = (p, obj) => fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8');
+
+const loadUsers = () => {
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8') || '[]');
+  } catch (e) {
+    console.error('loadUsers error', e);
+    return [];
+  }
+};
+const saveUsers = (arr) => fs.writeFileSync(USERS_FILE, JSON.stringify(arr, null, 2), 'utf8');
+const findUser = (telegramId) => loadUsers().find(u => u.telegram_id === telegramId);
+
+// --- Twilio client (safe init) ---
 let twilioClient = null;
 if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
   try {
     twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
   } catch (e) {
-    console.error('⚠️ Failed to initialize Twilio client:', e.message);
+    console.error('Failed to init Twilio client', e);
     twilioClient = null;
   }
 }
 
-// --- Directories + data files setup ---
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+// --- Telegram bot (polling) ---
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-
-// Initialize files if missing
-if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
-if (!fs.existsSync(SETTINGS_FILE)) {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
-    admin_ids: ADMIN_TELEGRAM_ID ? ADMIN_TELEGRAM_ID.split(',').map(s => s.trim()).filter(Boolean).map(Number) : [],
-    features: {
-      withdrawals_enabled: true,
-      uploads_enabled: true,
-      auto_admin_mode: true
-    }
-  }, null, 2));
-}
-
-// --- Helpers for data persistence ---
-const loadUsers = () => {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to load users.json:', e);
-    return [];
-  }
-};
-const saveUsers = (data) => {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
-};
-
-const loadSettings = () => {
-  try {
-    return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch (e) {
-    console.error('Failed to load settings.json:', e);
-    return { admin_ids: [], features: {} };
-  }
-};
-const saveSettings = (s) => fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2));
-
-const findUserByTelegram = (tgId) => loadUsers().find(u => u.telegram_id === tgId);
-const findUserByPhone = (phone) => loadUsers().find(u => u.phone === phone);
-
-// --- Multi-language support (basic) ---
-const LANG_STRINGS = {
+// --- Messages / Multi-language scaffold (expand later) ---
+const MESSAGES = {
   en: {
-    welcome: name => `👋 Hi ${name || 'there'}! Please verify your phone number to continue.`,
-    ask_phone: 'Please send your contact (📱 Share My Number) or type your phone number manually (example: +2348012345678).',
-    otp_sent: phone => `📨 Verification code sent to ${phone}. Please reply with the 6-digit code.`,
-    otp_failed: '❌ Failed to send OTP. Please check Twilio credentials and the phone number format.',
-    verified: '✅ Phone number verified successfully! You can now use /menu.',
-    invalid_code: '❌ Invalid code. Try again.',
-    need_verify: '⚠️ Please verify your phone first using /start.',
-    main_menu: 'Main Menu:',
-    scan_prompt: '📸 Send a photo of your waste or type the weight in KG:',
-    recorded: (w, a) => `✅ Recorded ${w}kg waste.\nYou earned ₦${a.toFixed(2)}! 💸`,
-    withdraw_min: '⚠️ Minimum withdrawal is ₦1000.',
-    withdraw_received: '✅ Withdrawal request received. Admin will process it soon!',
-    stats: (w, b) => `📈 Total Waste: ${w}kg\n💰 Balance: ₦${b.toFixed(2)}`,
-    admin_panel: '🧰 Admin Panel:\nUse /users to list users.\nUse /approve <phone_or_tgId> or /reject <phone_or_tgId> to manage withdrawals.\nUse /feature <name> <on|off> to toggle features.',
-    not_admin: '⛔ You are not an admin.',
-    unknown_command: "I didn't understand that. Use /menu."
-  },
-  yo: {
-    welcome: name => `👋 Bawo ${name || ''}! Jọwọ jẹrisi nomba foonu rẹ lati tẹsiwaju.`,
-    ask_phone: 'Jọwọ pin olubasọrọ rẹ tabi kọ nomba foonu rẹ (e.g. +2348012345678).',
-    otp_sent: phone => `📨 A ti ran koodu si ${phone}. Jọwọ fesi pẹlu koodu 6-digit.`,
-    otp_failed: '❌ Kò ríranṣẹ OTP. Ṣayẹwo awọn akọọlẹ Twilio rẹ.',
-    verified: '✅ A ti jẹrisi! Lo /menu bayi.',
-    invalid_code: '❌ Koodu ko tọ. Gbiyanju lẹẹkansi.',
-    need_verify: '⚠️ Jọwọ jẹrisi foonu rẹ pẹlu /start.',
-    main_menu: 'Akojọ aṣayan:',
-    scan_prompt: '📸 Fi fọto ranṣẹ tabi kọ iwọn ni KG:',
-    recorded: (w, a) => `✅ A ṣe igbasilẹ ${w}kg.\nO gba ₦${a.toFixed(2)}! 💸`,
-    withdraw_min: '⚠️ Ibeere yiyọ kere ju ₦1000 lọ.',
-    withdraw_received: '✅ A gba ibeere yiyọ. Admin yoo ṣayẹwo.',
-    stats: (w, b) => `📈 Igun apoti: ${w}kg\n💰 Iwọnyi: ₦${b.toFixed(2)}`,
-    admin_panel: '🧰 Paneli Admin:\nLo /users /approve /reject /feature',
-    not_admin: '⛔ O kii ṣe admin.',
-    unknown_command: "Emi ko ye e. Lo /menu."
-  },
-  ha: {
-    welcome: name => `👋 Sannu ${name || ''}! Don Allah tabbatar da wayarka kafin ci gaba.`,
-    ask_phone: 'Aiko lamba ko raba lamba (e.g. +2348012345678).',
-    otp_sent: phone => `📨 An tura lambar tabbatarwa zuwa ${phone}. A aiko da lambar ta 6-digit.`,
-    otp_failed: '❌ Ba a aika OTP ba. Duba Twilio credentials.',
-    verified: '✅ An tabbatar! Yi amfani da /menu yanzu.',
-    invalid_code: '❌ Lambar bata dace ba. Gwada sake.',
-    need_verify: '⚠️ Don Allah tabbatar da wayarka tare da /start.',
-    main_menu: 'Babban Menu:',
-    scan_prompt: '📸 Aiko hoto ko rubuta nauyi a KG:',
-    recorded: (w, a) => `✅ An rubuta ${w}kg.\nKa samu ₦${a.toFixed(2)}! 💸`,
-    withdraw_min: '⚠️ Mafi karancin cirewa ₦1000.',
-    withdraw_received: '✅ An karbi buƙatar cirewa. Admin zai tantance.',
-    stats: (w, b) => `📈 Jimlar Shara: ${w}kg\n💰 Adadin: ₦${b.toFixed(2)}`,
-    admin_panel: '🧰 Admin Panel: /users /approve /reject /feature',
-    not_admin: '⛔ Ba kai admin ba ne.',
-    unknown_command: "Ban fahimta ba. Yi amfani da /menu."
-  },
-  ig: {
-    welcome: name => `👋 Nnọọ ${name || ''}! Biko devee gị ekwentị tupu ịga n’ihu.`,
-    ask_phone: 'Biko kesaa kọntakt (📱) ma ọ bụ dee nọmba gị (e.g. +2348012345678).',
-    otp_sent: phone => `📨 Ezigbo! A zitere koodu na ${phone}. Zaa ya na koodu 6-digit.`,
-    otp_failed: '❌ Ezighi ezi: e nweghị ike izipu OTP. Lelee Twilio.',
-    verified: '✅ Edebanyere! Jiri /menu.',
-    invalid_code: '❌ Koodu ezighi ezi.',
-    need_verify: '⚠️ Biko debe ekwentị gị site na /start.',
-    main_menu: 'Isi Ntụziaka:',
-    scan_prompt: '📸 Zipu foto ma ọ bụ dee ibu na KG:',
-    recorded: (w, a) => `✅ Edere ${w}kg.\nInweta ₦${a.toFixed(2)}! 💸`,
-    withdraw_min: '⚠️ Withdraw kacha nta bụ ₦1000.',
-    withdraw_received: '✅ E nwetara arịrịọ withdraw. Admin ga-eme ya.',
-    stats: (w, b) => `📈 Total Waste: ${w}kg\n💰 Balance: ₦${b.toFixed(2)}`,
-    admin_panel: '🧰 Admin Panel: /users /approve /reject /feature',
-    not_admin: '⛔ Ị bụghị admin.',
-    unknown_command: "Amaghị m nke ahụ. Jiri /menu."
+    welcome_unverified: (name) => `👋 Welcome ${name || ''}!\nPlease verify your phone number first.\nYou can share your contact or type your phone number.`,
+    otp_sent: (phone) => `📨 Verification code sent to ${phone}. Reply with the 6-digit code.`,
+    otp_failed: `❌ Failed to send OTP. Please check Twilio credentials or try again later.`,
+    verified_ok: `✅ Phone number verified successfully! Use /menu to continue.`,
+    already_verified: `✅ You’re already verified! Use /menu to continue.`,
+    need_verify: `⚠️ Please verify your phone first using /start`,
+    main_menu: `Main Menu:`,
+    recorded: (kg, naira) => `✅ Recorded ${kg}kg waste.\nYou earned ₦${naira.toFixed(2)}! 💸`,
+    min_withdraw: `⚠️ Minimum withdrawal is ₦1000.`,
+    withdraw_received: `✅ Withdrawal request received. Admin will process it soon!`,
+    stats: (total, balance) => `📈 Total Waste: ${total}kg\n💰 Balance: ₦${balance.toFixed(2)}`
   }
 };
-
-function langText(userLang = 'en', key, ...args) {
-  const code = (userLang || 'en').slice(0,2).toLowerCase();
-  const dict = LANG_STRINGS[code] || LANG_STRINGS.en;
-  const value = dict[key];
-  if (typeof value === 'function') return value(...args);
-  return value || LANG_STRINGS.en[key] || '';
-}
-
-// --- Create bot (only if token present) ---
-let bot = null;
-if (TELEGRAM_TOKEN) {
-  bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-  console.log('2025 Starting in POLLING mode.');
-} else {
-  console.warn('Telegram token missing — bot not started. Add TELEGRAM_TOKEN env var.');
-}
-
-// --- Express keep-alive ---
-const app = express();
-app.get('/', (req, res) => res.send('Clean-Naija Bot: alive'));
-app.listen(PORT, () => console.log(`Express server listening on ${PORT}`));
 
 // --- Utility ---
-// price per kg (can become configurable)
-const PRICE_PER_KG = 120;
+const langFor = (user) => (user && user.language) || loadJSON(SETTINGS_FILE).language_default || 'en';
+const message = (key, user, ...args) => {
+  const lang = langFor(user);
+  const msg = (MESSAGES[lang] && MESSAGES[lang][key]) || MESSAGES['en'][key];
+  if (typeof msg === 'function') return msg(...args);
+  return msg || '';
+};
 
-// create or get user by telegram id
-function ensureUser(tgId, from) {
-  const users = loadUsers();
-  let user = users.find(u => u.telegram_id === tgId);
+// --- Bot startup log ---
+console.log(new Date().getFullYear(), 'Starting in POLLING mode.');
+console.log('🤖 Bot started successfully...');
+
+// --- /start handler ---
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  let users = loadUsers();
+  let user = users.find(u => u.telegram_id === chatId);
   if (!user) {
     user = {
-      telegram_id: tgId,
-      first_name: from && from.first_name ? from.first_name : null,
-      phone: null,
+      telegram_id: chatId,
       verified: false,
+      phone: null,
+      balance: 0,
+      total_waste: 0,
       awaiting_otp: false,
       awaiting_waste: false,
       awaiting_withdraw: false,
-      total_waste: 0,
-      balance: 0,
-      pending_withdrawals: [] // array of {amount, requested_at, details}
+      language: loadJSON(SETTINGS_FILE).language_default || 'en'
     };
     users.push(user);
     saveUsers(users);
   }
-  return user;
-}
 
-// parse phone number string into E.164 if possible (default region NG)
-function normalizePhone(raw) {
-  if (!raw) return null;
-  try {
-    const p = parsePhoneNumberFromString(raw, 'NG');
-    return p && p.isPossible() ? p.number : raw;
-  } catch (e) {
-    return raw;
-  }
-}
-
-// send OTP via Twilio Verify
-async function sendOTP(phone) {
-  if (!twilioClient || !TWILIO_VERIFY_SID) throw new Error('Twilio not configured');
-  return twilioClient.verify.v2.services(TWILIO_VERIFY_SID).verifications.create({
-    to: phone,
-    channel: 'sms'
-  });
-}
-
-// check OTP via Twilio Verify
-async function checkOTP(phone, code) {
-  if (!twilioClient || !TWILIO_VERIFY_SID) throw new Error('Twilio not configured');
-  return twilioClient.verify.v2.services(TWILIO_VERIFY_SID).verificationChecks.create({
-    to: phone,
-    code
-  });
-}
-
-// --- Bot handlers ---
-if (bot) {
-  // Start command
-  bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    const user = ensureUser(chatId, msg.from);
-    const userLang = msg.from && msg.from.language_code ? msg.from.language_code : 'en';
-
-    // greet and ask phone
-    bot.sendMessage(chatId, `${langText(userLang,'welcome', msg.from.first_name)}\n\n${langText(userLang,'ask_phone')}`, {
+  if (!user.verified && loadJSON(SETTINGS_FILE).verification_enabled) {
+    bot.sendMessage(chatId, message('welcome_unverified', user, msg.from.first_name), {
       reply_markup: {
-        keyboard: [[{ text: "📱 Share My Number", request_contact: true }]],
+        keyboard: [[{ text: "📱 Share My Number", request_contact: true }], [{ text: "Type phone number" }]],
         resize_keyboard: true,
         one_time_keyboard: true
       }
     });
-  });
+    return;
+  }
+  bot.sendMessage(chatId, message('already_verified', user));
+});
 
-  // menu command
-  bot.onText(/\/menu/, (msg) => {
-    const chatId = msg.chat.id;
-    const user = findUserByTelegram(chatId);
-    const userLang = msg.from && msg.from.language_code ? msg.from.language_code : 'en';
-    if (!user || !user.verified) {
-      return bot.sendMessage(chatId, langText(userLang, 'need_verify'));
-    }
+// --- contact share handler (user shares phone) ---
+bot.on('contact', async (msg) => {
+  const chatId = msg.chat.id;
+  const phone = msg.contact && msg.contact.phone_number;
+  if (!phone) return bot.sendMessage(chatId, "Invalid contact received.");
 
-    const settings = loadSettings();
-    const buttons = [];
-    if (settings.features.uploads_enabled) buttons.push([{ text: "♻️ Scan / Upload Waste" }]);
-    buttons.push([{ text: "💰 Withdraw" }, { text: "📊 My Stats" }]);
-    buttons.push([{ text: "📩 Contact Admin" }]);
-    if (settings.admin_ids.includes(chatId)) buttons.push([{ text: "🛠 Admin Panel" }]);
+  const users = loadUsers();
+  const user = users.find(u => u.telegram_id === chatId);
+  if (!user) return bot.sendMessage(chatId, "Please /start first.");
 
-    bot.sendMessage(chatId, langText(userLang, 'main_menu'), {
-      reply_markup: { keyboard: buttons, resize_keyboard: true }
-    });
-  });
+  user.phone = phone;
+  user.awaiting_otp = true;
+  saveUsers(users);
 
-  // contact shared by user
-  bot.on('contact', async (msg) => {
-    const chatId = msg.chat.id;
-    const user = ensureUser(chatId, msg.from);
-    const userLang = msg.from && msg.from.language_code ? msg.from.language_code : 'en';
-    if (!msg.contact || !msg.contact.phone_number) {
-      return bot.sendMessage(chatId, langText(userLang, 'ask_phone'));
-    }
-    const phone = normalizePhone(msg.contact.phone_number);
-    user.phone = phone;
-    user.awaiting_otp = true;
-    saveUsers(loadUsers());
-    try {
-      await sendOTP(phone);
-      bot.sendMessage(chatId, langText(userLang, 'otp_sent', phone));
-    } catch (e) {
-      console.error('OTP send failed:', e && e.message ? e.message : e);
-      bot.sendMessage(chatId, langText(userLang, 'otp_failed'));
-    }
-  });
-
-  // handle photos, OTP codes, menu selections and messages
-  bot.on('message', async (msg) => {
-    // ignore service messages (contact handled above)
-    if (!msg || !msg.chat) return;
-    const chatId = msg.chat.id;
-    const text = msg.text ? (msg.text+'').trim() : '';
-    const userLang = msg.from && msg.from.language_code ? msg.from.language_code : 'en';
-
-    // ignore messages that are commands (we handle some separately)
-    if (text && text.startsWith('/')) return;
-
-    let users = loadUsers();
-    let user = users.find(u => u.telegram_id === chatId);
-    if (!user) {
-      user = ensureUser(chatId, msg.from);
-      users = loadUsers();
-    }
-
-    // If user has photo(s)
-    if (msg.photo && msg.photo.length > 0 && user.verified) {
-      // Save the largest photo
-      try {
-        const photo = msg.photo[msg.photo.length - 1];
-        const fileId = photo.file_id;
-        const fileLink = await bot.getFileLink(fileId);
-        const ext = path.extname(fileLink.split('?')[0]) || '.jpg';
-        const filename = `upload_${chatId}_${Date.now()}${ext}`;
-        const outPath = path.join(UPLOADS_DIR, filename);
-
-        const response = await axios({ method: 'get', url: fileLink, responseType: 'stream' });
-        const writer = fs.createWriteStream(outPath);
-        response.data.pipe(writer);
-        await new Promise((res, rej) => writer.on('finish', res).on('error', rej));
-
-        // Simulated offline waste detection (no external API)
-        const classes = ['Plastic', 'Paper', 'Metal', 'Organic', 'Glass'];
-        const detected = classes[Math.floor(Math.random()*classes.length)];
-        // weight estimate (0.2 - 5.0 kg)
-        const weight = parseFloat((Math.random()*4.8 + 0.2).toFixed(2));
-        const amount = weight * PRICE_PER_KG;
-
-        user.total_waste = (user.total_waste || 0) + weight;
-        user.balance = (user.balance || 0) + amount;
-        saveUsers(users);
-
-        bot.sendMessage(chatId,
-          `🔎 Detected: ${detected}\n📦 Estimated weight: ${weight}kg\n💰 Earned: ₦${amount.toFixed(2)}\n\n${langText(userLang,'recorded', weight, amount)}`
-        );
-
-      } catch (e) {
-        console.error('Photo handling failed:', e);
-        bot.sendMessage(chatId, '⚠️ Failed to process image. Try again.');
-      }
-      return;
-    }
-
-    // If user awaiting OTP and message is 6 digits -> check OTP
-    if (user.awaiting_otp && /^\d{4,6}$/.test(text)) {
-      const code = text;
-      if (!user.phone) return bot.sendMessage(chatId, langText(userLang,'ask_phone'));
-      try {
-        const res = await checkOTP(user.phone, code);
-        if (res && res.status === 'approved') {
-          user.verified = true;
-          user.awaiting_otp = false;
-          saveUsers(loadUsers());
-          bot.sendMessage(chatId, langText(userLang,'verified'));
-        } else {
-          bot.sendMessage(chatId, langText(userLang,'invalid_code'));
-        }
-      } catch (e) {
-        console.error('OTP verification error:', e && e.message ? e.message : e);
-        bot.sendMessage(chatId, langText(userLang,'invalid_code'));
-      }
-      return;
-    }
-
-    // If message looks like a phone number and user not verified -> start verify
-    if (!user.verified && text && (text.match(/\d/) && text.length >= 7)) {
-      const phone = normalizePhone(text);
-      user.phone = phone;
-      user.awaiting_otp = true;
-      saveUsers(loadUsers());
-      try {
-        await sendOTP(phone);
-        bot.sendMessage(chatId, langText(userLang, 'otp_sent', phone));
-      } catch (e) {
-        console.error('OTP send failed (manual):', e && e.message ? e.message : e);
-        bot.sendMessage(chatId, langText(userLang, 'otp_failed'));
-      }
-      return;
-    }
-
-    // Only verified users can access the rest
-    if (!user.verified) {
-      return bot.sendMessage(chatId, langText(userLang, 'need_verify'));
-    }
-
-    // User interactions
-    const settings = loadSettings();
-
-    if (text === "♻️ Scan / Upload Waste") {
-      if (!settings.features.uploads_enabled) return bot.sendMessage(chatId, 'Uploads currently disabled by admin.');
-      user.awaiting_waste = true;
-      saveUsers(loadUsers());
-      return bot.sendMessage(chatId, langText(userLang, 'scan_prompt'));
-    }
-
-    if (user.awaiting_waste && /^\d+(\.\d+)?$/.test(text)) {
-      const weight = parseFloat(text);
-      const amount = weight * PRICE_PER_KG;
-      user.total_waste = (user.total_waste || 0) + weight;
-      user.balance = (user.balance || 0) + amount;
-      user.awaiting_waste = false;
-      saveUsers(loadUsers());
-      return bot.sendMessage(chatId, langText(userLang, 'recorded', weight, amount));
-    }
-
-    if (text === "💰 Withdraw") {
-      if (!settings.features.withdrawals_enabled) return bot.sendMessage(chatId, 'Withdrawals are currently disabled by admin.');
-      if (user.balance < 1000) return bot.sendMessage(chatId, langText(userLang,'withdraw_min'));
-      user.awaiting_withdraw = true;
-      saveUsers(loadUsers());
-      return bot.sendMessage(chatId, `💳 Your balance is ₦${user.balance.toFixed(2)}.\nPlease send your account details (Account name, bank, account number).`);
-    }
-
-    if (user.awaiting_withdraw) {
-      // save pending withdrawal
-      const amount = user.balance;
-      const details = text;
-      const withdrawal = { amount, requested_at: new Date().toISOString(), details, status: 'pending', telegram_id: user.telegram_id, phone: user.phone };
-      user.pending_withdrawals = user.pending_withdrawals || [];
-      user.pending_withdrawals.push(withdrawal);
-      user.awaiting_withdraw = false;
-      // keep balance until admin approves (simulation)
-      saveUsers(loadUsers());
-
-      // notify admins
-      const settings2 = loadSettings();
-      settings2.admin_ids.forEach(adminId => {
-        bot.sendMessage(adminId, `💰 New withdrawal request\nUser: ${user.phone || user.telegram_id}\nAmount: ₦${amount.toFixed(2)}\nDetails: ${details}\nCommands: /approve ${user.phone || user.telegram_id}  OR /reject ${user.phone || user.telegram_id}`);
-      });
-
-      return bot.sendMessage(chatId, langText(userLang, 'withdraw_received'));
-    }
-
-    if (text === "📊 My Stats") {
-      return bot.sendMessage(chatId, langText(userLang, 'stats', user.total_waste || 0, user.balance || 0));
-    }
-
-    if (text === "📩 Contact Admin") {
-      // forwards user's message to all admins (simulate)
-      const settings3 = loadSettings();
-      settings3.admin_ids.forEach(adminId => {
-        bot.sendMessage(adminId, `📩 Contact from ${user.phone || user.telegram_id} (${user.first_name || 'unknown'}):\nYou can reply with /msg ${user.telegram_id} <text> to message them.`);
-      });
-      return bot.sendMessage(chatId, '✅ Your message was forwarded to admins.');
-    }
-
-    if (text === "🛠 Admin Panel" && settings.admin_ids.includes(chatId)) {
-      return bot.sendMessage(chatId, langText(userLang, 'admin_panel'));
-    }
-
-    // fallback
-    return bot.sendMessage(chatId, langText(userLang, 'unknown_command'));
-  });
-
-  // Admin-only commands
-  bot.onText(/\/users/, (msg) => {
-    const chatId = msg.chat.id;
-    const settings = loadSettings();
-    if (!settings.admin_ids.includes(chatId)) return bot.sendMessage(chatId, LANG_STRINGS.en.not_admin);
-    const users = loadUsers();
-    const list = users.map(u => `${u.phone || 'unknown'} - ₦${(u.balance||0).toFixed(2)} - verified:${u.verified}`).join('\n') || 'No users yet.';
-    bot.sendMessage(chatId, `👥 Users:\n${list}`);
-  });
-
-  // approve / reject withdraw
-  bot.onText(/\/approve (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const target = match[1].trim();
-    const settings = loadSettings();
-    if (!settings.admin_ids.includes(chatId)) return bot.sendMessage(chatId, LANG_STRINGS.en.not_admin);
-
-    let users = loadUsers();
-    let user = users.find(u => String(u.phone) === target || String(u.telegram_id) === target || (u.phone && u.phone.endsWith(target)));
-    if (!user) return bot.sendMessage(chatId, 'User not found');
-
-    // find pending withdrawal
-    const pw = (user.pending_withdrawals || []).find(w => w.status === 'pending');
-    if (!pw) return bot.sendMessage(chatId, 'No pending withdrawal found for this user.');
-    pw.status = 'approved';
-    pw.processed_by = chatId;
-    pw.processed_at = new Date().toISOString();
-
-    // simulate payout: clear balance
-    user.balance = 0;
-    saveUsers(users);
-
-    // notify user
-    bot.sendMessage(user.telegram_id, `✅ Your withdrawal of ₦${pw.amount.toFixed(2)} has been approved by admin.`);
-    bot.sendMessage(chatId, `✅ Approved and paid: ₦${pw.amount.toFixed(2)}`);
-  });
-
-  bot.onText(/\/reject (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const target = match[1].trim();
-    const settings = loadSettings();
-    if (!settings.admin_ids.includes(chatId)) return bot.sendMessage(chatId, LANG_STRINGS.en.not_admin);
-
-    let users = loadUsers();
-    let user = users.find(u => String(u.phone) === target || String(u.telegram_id) === target || (u.phone && u.phone.endsWith(target)));
-    if (!user) return bot.sendMessage(chatId, 'User not found');
-
-    const pw = (user.pending_withdrawals || []).find(w => w.status === 'pending');
-    if (!pw) return bot.sendMessage(chatId, 'No pending withdrawal found for this user.');
-    pw.status = 'rejected';
-    pw.processed_by = chatId;
-    pw.processed_at = new Date().toISOString();
-    saveUsers(users);
-
-    bot.sendMessage(user.telegram_id, `❌ Your withdrawal request of ₦${pw.amount.toFixed(2)} has been rejected by admin.`);
-    bot.sendMessage(chatId, `❌ Rejected withdrawal of ₦${pw.amount.toFixed(2)}`);
-  });
-
-  // toggle feature
-  bot.onText(/\/feature (.+) (on|off)/i, (msg, match) => {
-    const chatId = msg.chat.id;
-    const settings = loadSettings();
-    if (!settings.admin_ids.includes(chatId)) return bot.sendMessage(chatId, LANG_STRINGS.en.not_admin);
-    const feature = match[1].trim();
-    const value = match[2].toLowerCase() === 'on';
-    if (!settings.features.hasOwnProperty(feature)) return bot.sendMessage(chatId, `Feature '${feature}' not found.`);
-    settings.features[feature] = value;
-    saveSettings(settings);
-    bot.sendMessage(chatId, `Feature ${feature} set to ${value ? 'ON' : 'OFF'}`);
-  });
-
-  // admin send message to user: /msg <tgId> <text>
-  bot.onText(/\/msg (\d+)\s+([\s\S]+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const settings = loadSettings();
-    if (!settings.admin_ids.includes(chatId)) return bot.sendMessage(chatId, LANG_STRINGS.en.not_admin);
-    const targetId = parseInt(match[1], 10);
-    const text = match[2];
-    bot.sendMessage(targetId, `📣 Message from Admin:\n${text}`).then(() => {
-      bot.sendMessage(chatId, 'Message sent.');
-    }).catch((e) => {
-      bot.sendMessage(chatId, `Failed to send message: ${e.message || e}`);
-    });
-  });
-
-  // Add admin via env if present and not existed
-  const settings = loadSettings();
-  const adminIdsFromEnv = ADMIN_TELEGRAM_ID ? ADMIN_TELEGRAM_ID.split(',').map(s => Number(s.trim())).filter(Boolean) : [];
-  const missingAdmins = adminIdsFromEnv.filter(id => !settings.admin_ids.includes(id));
-  if (missingAdmins.length) {
-    settings.admin_ids = Array.from(new Set([...(settings.admin_ids || []), ...adminIdsFromEnv]));
-    saveSettings(settings);
+  // send OTP
+  if (!twilioClient) {
+    bot.sendMessage(chatId, message('otp_failed', user));
+    console.error('Twilio client not initialized - cannot send OTP.');
+    return;
   }
 
-  bot.on("polling_error", (err) => {
-    console.error("Polling error:", err && err.code ? JSON.stringify(err) : err);
-  });
+  try {
+    const resp = await twilioClient.verify.v2.services(TWILIO_VERIFY_SID)
+      .verifications.create({ to: phone, channel: 'sms' });
+    console.log('Twilio verification create response:', resp && resp.sid);
+    bot.sendMessage(chatId, message('otp_sent', user, phone));
+  } catch (err) {
+    console.error('Twilio send OTP error:', err && err.message ? err.message : err);
+    bot.sendMessage(chatId, `${message('otp_failed', user)}\n\n(${err && err.message ? err.message : 'unknown error'})`);
+  }
+});
 
-  console.log('🤖 Bot started successfully...');
-}
+// --- message handler: OTP, menu actions & flows ---
+// We listen to messages and filter out non-text where needed.
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = (msg.text || '').trim();
+  // ignore contact messages here (handled earlier)
+  if (msg.contact) return;
 
-// If bot not started (no TELEGRAM_TOKEN) still keep process alive; express is running.
+  let users = loadUsers();
+  let user = users.find(u => u.telegram_id === chatId);
+
+  // Create default user if missing
+  if (!user) {
+    user = {
+      telegram_id: chatId,
+      verified: false,
+      phone: null,
+      balance: 0,
+      total_waste: 0,
+      awaiting_otp: false,
+      awaiting_waste: false,
+      awaiting_withdraw: false,
+      language: loadJSON(SETTINGS_FILE).language_default || 'en'
+    };
+    users.push(user);
+    saveUsers(users);
+  }
+
+  // If expecting OTP and message is 6 digits
+  if (user.awaiting_otp && /^\d{4,6}$/.test(text)) {
+    if (!twilioClient) {
+      bot.sendMessage(chatId, message('otp_failed', user));
+      return;
+    }
+    try {
+      const check = await twilioClient.verify.v2.services(TWILIO_VERIFY_SID)
+        .verificationChecks.create({ to: user.phone, code: text });
+      console.log('verificationChecks result:', check && check.status);
+      if (check && check.status === 'approved') {
+        user.verified = true;
+        user.awaiting_otp = false;
+        saveUsers(users);
+        bot.sendMessage(chatId, message('verified_ok', user));
+      } else {
+        bot.sendMessage(chatId, "❌ Invalid code. Try again.");
+      }
+    } catch (err) {
+      console.error('Twilio verify error:', err && err.message ? err.message : err);
+      bot.sendMessage(chatId, "⚠️ Verification failed. Please try again later.");
+    }
+    return;
+  }
+
+  // If user is sending a phone number manually (very simple check)
+  if (!user.verified && loadJSON(SETTINGS_FILE).verification_enabled && /^\+?\d{7,15}$/.test(text)) {
+    user.phone = text;
+    user.awaiting_otp = true;
+    saveUsers(users);
+
+    if (!twilioClient) {
+      bot.sendMessage(chatId, message('otp_failed', user));
+      return;
+    }
+    try {
+      const resp = await twilioClient.verify.v2.services(TWILIO_VERIFY_SID)
+        .verifications.create({ to: text, channel: 'sms' });
+      console.log('Twilio verification create response (manual):', resp && resp.sid);
+      bot.sendMessage(chatId, message('otp_sent', user, text));
+    } catch (err) {
+      console.error('Twilio send OTP error:', err && err.message ? err.message : err);
+      bot.sendMessage(chatId, `${message('otp_failed', user)}\n\n(${err && err.message ? err.message : 'unknown error'})`);
+    }
+    return;
+  }
+
+  // Accept only verified users for the rest of flows
+  if (!user.verified && loadJSON(SETTINGS_FILE).verification_enabled) {
+    return bot.sendMessage(chatId, message('need_verify', user));
+  }
+
+  // Handle uploads (photos)
+  if (msg.photo && msg.photo.length) {
+    // Save highest resolution photo
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    try {
+      const filePath = await bot.getFileLink(fileId);
+      // fetch and save file to uploads using axios
+      const axios = require('axios');
+      const response = await axios.get(filePath, { responseType: 'arraybuffer', timeout: 20000 });
+      const filename = `upload_${chatId}_${Date.now()}.jpg`;
+      const fullPath = path.join(UPLOADS_DIR, filename);
+      fs.writeFileSync(fullPath, response.data);
+      user.awaiting_waste = true;
+      user.last_upload = filename;
+      saveUsers(users);
+      bot.sendMessage(chatId, `📸 Photo saved as ${filename}. Please reply with the weight in KG (e.g. 2.5).`);
+    } catch (err) {
+      console.error('Failed to save image', err && err.message ? err.message : err);
+      bot.sendMessage(chatId, "❌ Failed to process the photo. Please try again or send weight manually.");
+    }
+    return;
+  }
+
+  // If expecting weight input after upload or scan
+  if (user.awaiting_waste && /^\d+(\.\d+)?$/.test(text)) {
+    const weight = parseFloat(text);
+    const amount = weight * 120; // simulation ₦120 per kg
+    user.total_waste = (user.total_waste || 0) + weight;
+    user.balance = (user.balance || 0) + amount;
+    user.awaiting_waste = false;
+    saveUsers(users);
+    bot.sendMessage(chatId, message('recorded', user, weight, amount));
+    return;
+  }
+
+  // Menu commands & quick buttons
+  if (text === '/menu' || text.toLowerCase() === 'menu') {
+    const buttons = [
+      [{ text: "♻️ Scan Waste" }],
+      [{ text: "💰 Withdraw" }],
+      [{ text: "📊 My Stats" }],
+      [{ text: "🔁 Change Language" }]
+    ];
+    // Admin button
+    if (ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+      buttons.push([{ text: "🛠 Admin Panel" }]);
+    }
+    return bot.sendMessage(chatId, message('main_menu', user), {
+      reply_markup: { keyboard: buttons, resize_keyboard: true }
+    });
+  }
+
+  // User chooses Scan Waste
+  if (text === "♻️ Scan Waste") {
+    user.awaiting_waste = true;
+    saveUsers(users);
+    return bot.sendMessage(chatId, "📸 Send a photo of your waste or type the weight in KG (e.g. 1.5).");
+  }
+
+  // Withdraw
+  if (text === "💰 Withdraw") {
+    if (!loadJSON(SETTINGS_FILE).withdrawals_enabled) {
+      return bot.sendMessage(chatId, "Withdrawals are temporarily disabled by admin.");
+    }
+    if ((user.balance || 0) < 1000) {
+      return bot.sendMessage(chatId, message('min_withdraw', user));
+    }
+    user.awaiting_withdraw = true;
+    saveUsers(users);
+    return bot.sendMessage(chatId, `💳 Your balance is ₦${(user.balance || 0).toFixed(2)}.\nPlease send your payout details (account number / bank).`);
+  }
+
+  // Handle withdrawal details
+  if (user.awaiting_withdraw) {
+    user.awaiting_withdraw = false;
+    const payoutInfo = text;
+    // Store pending request in user object
+    user.pending_withdrawal = {
+      amount: user.balance,
+      info: payoutInfo,
+      requested_at: new Date().toISOString(),
+      status: 'pending'
+    };
+    saveUsers(users);
+    bot.sendMessage(chatId, message('withdraw_received', user));
+    // notify admin(s)
+    const adminsToNotify = [];
+    if (ADMIN_TELEGRAM_ID) adminsToNotify.push(ADMIN_TELEGRAM_ID);
+    // if settings include a list or in future, expand
+    adminsToNotify.forEach(aid => {
+      bot.sendMessage(aid, `💰 New withdrawal request:\nUser: ${user.phone || user.telegram_id}\nAmount: ₦${user.balance}\nDetails: ${payoutInfo}\nTo /approve or /reject use: /approve ${user.telegram_id} or /reject ${user.telegram_id}`);
+    });
+    return;
+  }
+
+  // My Stats
+  if (text === "📊 My Stats") {
+    return bot.sendMessage(chatId, message('stats', user, user.total_waste || 0, user.balance || 0));
+  }
+
+  // Admin Panel (simple)
+  if (text === "🛠 Admin Panel" && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    return bot.sendMessage(chatId, "🧰 Admin Panel:\n/approve <userId> - approve withdrawal\n/reject <userId> - reject withdrawal\n/broadcast <msg> - message all verified users\n/toggle_verification - toggle verification system\n/toggle_withdrawals - toggle withdrawals system\n/users - list users");
+  }
+
+  // /users - admin only
+  if (text.startsWith('/users') && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    const all = loadUsers();
+    const list = all.map(u => `${u.telegram_id} | ${u.phone || 'nophone'} | ₦${(u.balance||0).toFixed(2)} | verified:${u.verified}`).slice(0,200).join('\n');
+    return bot.sendMessage(chatId, `👥 Users:\n${list || 'No users yet.'}`);
+  }
+
+  // /approve <id>
+  if (text.startsWith('/approve') && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    const parts = text.split(/\s+/);
+    const uid = parts[1];
+    if (!uid) return bot.sendMessage(chatId, 'Usage: /approve <telegramId>');
+    let all = loadUsers();
+    const u = all.find(x => String(x.telegram_id) === String(uid));
+    if (!u || !u.pending_withdrawal) return bot.sendMessage(chatId, 'No pending withdrawal for that user.');
+    u.pending_withdrawal.status = 'approved';
+    u.balance = 0;
+    saveUsers(all);
+    bot.sendMessage(chatId, `✅ Withdrawal for ${uid} approved.`);
+    bot.sendMessage(u.telegram_id, `💸 Your withdrawal for ₦${u.pending_withdrawal.amount} has been APPROVED by admin.`);
+    return;
+  }
+
+  // /reject <id>
+  if (text.startsWith('/reject') && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    const parts = text.split(/\s+/);
+    const uid = parts[1];
+    if (!uid) return bot.sendMessage(chatId, 'Usage: /reject <telegramId>');
+    let all = loadUsers();
+    const u = all.find(x => String(x.telegram_id) === String(uid));
+    if (!u || !u.pending_withdrawal) return bot.sendMessage(chatId, 'No pending withdrawal for that user.');
+    u.pending_withdrawal.status = 'rejected';
+    saveUsers(all);
+    bot.sendMessage(chatId, `❌ Withdrawal for ${uid} rejected.`);
+    bot.sendMessage(u.telegram_id, `❌ Your withdrawal for ₦${u.pending_withdrawal.amount} has been REJECTED by admin.`);
+    return;
+  }
+
+  // /broadcast message
+  if (text.startsWith('/broadcast') && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    const msg = text.replace('/broadcast', '').trim();
+    if (!msg) return bot.sendMessage(chatId, 'Usage: /broadcast <message>');
+    const all = loadUsers().filter(u => u.verified);
+    let success = 0;
+    for (const u of all) {
+      try {
+        await bot.sendMessage(u.telegram_id, `📢 Broadcast from Admin:\n\n${msg}`);
+        success++;
+      } catch (e) {
+        console.error('Broadcast send failed to', u.telegram_id, e && e.message ? e.message : e);
+      }
+    }
+    return bot.sendMessage(chatId, `Broadcast sent to ${success}/${all.length} verified users.`);
+  }
+
+  // toggles
+  if (text === '/toggle_verification' && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    let settings = loadJSON(SETTINGS_FILE);
+    settings.verification_enabled = !settings.verification_enabled;
+    saveJSON(SETTINGS_FILE, settings);
+    return bot.sendMessage(chatId, `Verification toggled: ${settings.verification_enabled}`);
+  }
+  if (text === '/toggle_withdrawals' && ADMIN_TELEGRAM_ID && ADMIN_TELEGRAM_ID === chatId) {
+    let settings = loadJSON(SETTINGS_FILE);
+    settings.withdrawals_enabled = !settings.withdrawals_enabled;
+    saveJSON(SETTINGS_FILE, settings);
+    return bot.sendMessage(chatId, `Withdrawals toggled: ${settings.withdrawals_enabled}`);
+  }
+
+  // change language simple flow
+  if (text === '🔁 Change Language') {
+    return bot.sendMessage(chatId, 'Select language:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'English', callback_data: 'lang_en' }],
+          // add more languages as needed
+        ]
+      }
+    });
+  }
+
+  // default fallback
+  return; // ignore other messages
+});
+
+// callback queries for inline buttons (language selection)
+bot.on('callback_query', (q) => {
+  const chatId = q.from.id;
+  const data = q.data;
+  let users = loadUsers();
+  const user = users.find(u => u.telegram_id === chatId);
+  if (!user) return bot.answerCallbackQuery(q.id, { text: 'User not found' });
+
+  if (data && data.startsWith('lang_')) {
+    const lng = data.split('_')[1];
+    user.language = lng;
+    saveUsers(users);
+    bot.answerCallbackQuery(q.id, { text: `Language set to ${lng}` });
+    bot.sendMessage(chatId, `Language updated.`);
+  } else {
+    bot.answerCallbackQuery(q.id, { text: 'Unknown action' });
+  }
+});
+
+// --- Express server for health / webhook compatibility ---
+const app = express();
+app.get('/', (req, res) => res.send('Clean-Naija-Bot is running'));
+app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+app.listen(process.env.PORT || 8080, () => console.log('Express server listening on', process.env.PORT || 8080));
+
+// --- graceful shutdown ---
+const shutDown = () => {
+  console.log('Shutting down...');
+  try {
+    bot.stopPolling();
+  } catch (e) { /* ignore */ }
+  process.exit(0);
+};
+process.on('SIGINT', shutDown);
+process.on('SIGTERM', shutDown);
+
+// --- global error handlers ---
+process.on('unhandledRejection', (reason, p) => {
+  console.error('Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
