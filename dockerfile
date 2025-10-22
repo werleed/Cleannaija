@@ -4,16 +4,19 @@ FROM node:18-alpine
 # Set working directory
 WORKDIR /app
 
-# Copy dependency files from your 'public' folder
+# Copy package metadata first (to leverage Docker cache)
 COPY public/package*.json ./
 
-# Install only production dependencies
+# Install dependencies (production)
 RUN npm install --omit=dev
 
-# Copy all project files
+# Copy app source (assumes your project files are in public/)
 COPY public .
 
-# Expose port for Railway health check
+# Ensure data and uploads folders exist (optional, done at runtime too)
+RUN mkdir -p data uploads
+
+# Expose port for Railway health checks
 EXPOSE 8080
 
 # Start the bot
