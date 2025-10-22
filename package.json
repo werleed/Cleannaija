@@ -1,4 +1,4 @@
-l{
+{
   "name": "clean-naija-bot",
   "version": "1.0.0",
   "description": "Clean Naija Telegram Bot with Twilio OTP verification and offline scanning support.",
@@ -16,5 +16,4 @@ l{
   "engines": {
     "node": ">=18.0.0"
   }
-}
 }
