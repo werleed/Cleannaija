@@ -1,14 +1,16 @@
 {
   "name": "clean-naija-bot",
   "version": "1.0.0",
-  "main": "server.js",
+  "type": "module",
+  "main": "bot.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "telegraf": "^4.12.2",
-    "express": "^4.19.2",
+    "axios": "^1.4.0",
     "dotenv": "^16.3.1",
-    "axios": "^1.4.0"
+    "express": "^4.19.2",
+    "twilio": "^4.21.0"
   }
 }
