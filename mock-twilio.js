@@ -1,25 +1,37 @@
-// mock-twilio.js
-// Simple mock: generate OTP and pretend to "send". No external network.
-const crypto = require('crypto');
+/**
+ * mock-twilio.js
+ * Simple offline verification service for development.
+ * - send(phone) -> stores a code in-memory and returns success
+ * - check(phone, code) -> validates code
+ *
+ * This is intentionally simple and ephemeral (in-memory).
+ */
+
+const codes = new Map();
+
+function genCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 module.exports = {
-  generateOTP: (userId) => {
-    const otp = Math.floor(1000 + Math.random() * 9000); // 4-digit
-    // In a real Twilio integration you would send SMS. For now we return OTP to be saved by caller.
-    console.log(`[mock-twilio] Generated OTP for ${userId}: ${otp}`);
-    return otp;
+  send: async (phone) => {
+    const code = genCode();
+    codes.set(phone, { code, ts: Date.now() });
+    // In dev we log but do not send SMS
+    console.log(`[mock-twilio] Sent code ${code} to ${phone} (mock).`);
+    return { success: true, sid: `mock-${Date.now()}` };
   },
-
-  sendOTP: async (phone) => {
-    // simulate sending, success true for mock
-    const otp = Math.floor(1000 + Math.random() * 9000);
-    console.log(`[mock-twilio] sendOTP simulated to ${phone}: ${otp}`);
-    return { success: true, otp };
+  check: async (phone, code) => {
+    const entry = codes.get(phone);
+    if (!entry) return { success: false };
+    // expire after 10 minutes
+    const age = Date.now() - (entry.ts || 0);
+    if (age > 10 * 60 * 1000) {
+      codes.delete(phone);
+      return { success: false, reason: "expired" };
+    }
+    const ok = entry.code === code.toString();
+    if (ok) codes.delete(phone);
+    return { success: ok };
   },
-
-  // professional wrapper for future real Twilio integration
-  sendSMS: async (phone, body) => {
-    console.log(`[mock-twilio] sendSMS simulated to ${phone}: ${body}`);
-    return { success: true, sid: 'MOCK123' };
-  }
 };
