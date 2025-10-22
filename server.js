@@ -1,17 +1,20 @@
-import express from "express";
-import dotenv from "dotenv";
-import cors from "cors";
-import "./bot.js"; // starts your Telegram bot
-
-dotenv.config();
-
+// server.js - CommonJS
+require('dotenv').config();
+const express = require('express');
 const app = express();
-app.use(cors());
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("✅ Clean Naija Bot is running successfully!");
+// require + start bot (bot.js will initialize the Telegraf bot)
+require('./bot.js');
+
+app.get('/', (req, res) => {
+  res.send('OK - Clean Naija Bot is running');
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', ts: Date.now() });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on ${PORT}`);
+});
