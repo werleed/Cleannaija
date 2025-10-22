@@ -1,20 +1,20 @@
-# Use Node.js 18 LTS (Alpine for smaller image)
+# Use Node.js 18 LTS
 FROM node:18-alpine
 
-# Create app dir and set permissions
+# Set working directory
 WORKDIR /app
 
-# Copy package files from public folder (your project is in public/ on GitHub)
+# Copy dependency files from your 'public' folder
 COPY public/package*.json ./
 
-# Install production deps only
-RUN npm ci --only=production
+# Install only production dependencies
+RUN npm install --omit=dev
 
-# Copy everything from public into container
-COPY public/ .
+# Copy all project files
+COPY public .
 
-# Expose port (Railway health checks expect 8080 by default)
+# Expose port for Railway health check
 EXPOSE 8080
 
-# Start
+# Start the bot
 CMD ["npm", "start"]
