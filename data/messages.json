@@ -1,0 +1,21 @@
+{
+  "en": {
+    "welcome": "Welcome to Clean9ja Bot. Use the menu to interact with the service.",
+    "min_withdraw": "You need at least ₦{min} to withdraw.",
+    "withdrawal_disabled": "Withdrawals are currently disabled by admin.",
+    "withdrawal_requested": "✅ Withdrawal request received. Admin will process it shortly.",
+    "send_otp_prompt": "We will send you an OTP to verify your phone before using the bot.",
+    "otp_sent": "An OTP has been sent to {phone}. Enter it to verify.",
+    "otp_failed": "❌ Failed to send OTP. Admin must configure Twilio.",
+    "otp_verified": "✅ Phone verified successfully. You may proceed.",
+    "not_verified": "You must verify your phone before using this feature.",
+    "professional_error": "An error occurred. Please try again or contact an admin.",
+    "scan_online": "Online scanning started — analyzing image for waste...",
+    "scan_offline": "Offline scanning started — please upload an image to scan."
+  },
+  "yo": {
+    "welcome": "Kaabo si Clean9ja Bot. Lo menu lati ba eto sọrọ.",
+    "min_withdraw": "O nilo o kere ₦{min} lati fa owo.",
+    "withdrawal_disabled": "A ko gba awọn yiyọ kuro lọwọlọwọ nipasẹ admin."
+  }
+}
