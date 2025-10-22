@@ -1,20 +1,20 @@
-# Dockerfile
+# Use official Node.js 18 runtime
 FROM node:18
 
 # Create app directory
 WORKDIR /app
 
-# copy package files first (cache layer)
-COPY package.json package-lock.json* ./
+# Copy package.json and package-lock if present
+COPY package*.json ./
 
-# install dependencies (production)
-RUN npm ci --omit=dev || npm install --omit=dev
+# Install app dependencies (production only)
+RUN npm install --omit=dev
 
-# copy rest of the app
+# Copy source
 COPY . .
 
-# ensure directories exist
-RUN mkdir -p /app/data /app/uploads && touch /app/data/users.json
+# Expose port if you later need (not required for polling bots)
+# EXPOSE 8080
 
-# expose nothing needed; use Railway env for start
+# Start the bot
 CMD ["npm", "start"]
