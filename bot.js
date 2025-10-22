@@ -494,10 +494,7 @@ process.on('unhandledRejection', (reason, p) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
-
 // ✅ Keep bot alive with Express (prevents Railway from stopping)
-const express = require('express');
-const fetch = require('node-fetch');
 const app = express();
 
 app.get('/health', (req, res) => {
