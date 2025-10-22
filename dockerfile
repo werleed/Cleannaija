@@ -1,26 +1,26 @@
-# Use Node.js 18 LTS
+# Use official lightweight Node.js image
 FROM node:18-alpine
 
 # Create app directory
 WORKDIR /app
 
-# Copy package.json and package-lock if present
-COPY package*.json ./
+# Copy package files first to leverage layer caching
+COPY package.json package-lock.json* ./
 
-# Install dependencies
-RUN npm install --omit=dev
+# Install deps (no dev dependencies)
+RUN npm ci --omit=dev
 
-# Copy application code
+# Copy rest of the app
 COPY . .
 
-# Ensure data dir exists
-RUN mkdir -p data
+# Create data dir (persisted by container)
+RUN mkdir -p /app/data && chown -R node:node /app/data
 
-# Expose port for health checks and admin UI
+# Use non-root user
+USER node
+
+# Expose health port if needed (telegram uses outgoing)
 EXPOSE 8080
 
-# Default env (can be overridden in Railway)
-ENV PORT=8080
-
-# Start
-CMD ["npm", "start"]
+# Start command
+CMD ["node", "bot.js"]
