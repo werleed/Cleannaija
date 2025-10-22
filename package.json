@@ -1,18 +1,16 @@
 {
   "name": "clean-naija-bot",
   "version": "1.0.0",
-  "description": "Clean Naija Telegram Bot with Twilio OTP verification and offline scanning/upload support.",
+  "description": "Clean Naija Telegram Bot with Twilio OTP verification and offline waste scanning uploads.",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
     "axios": "^1.6.0",
-    "aws-sdk": "^2.1360.0",
     "dotenv": "^16.3.1",
     "fs-extra": "^11.1.1",
-    "libphonenumber-js": "^1.9.55",
-    "node-telegram-bot-api": "^0.66.0",
     "twilio": "^4.19.0"
   },
   "engines": {
