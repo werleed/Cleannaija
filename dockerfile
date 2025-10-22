@@ -1,21 +1,24 @@
-# --- Stage 1: Base Image ---
-FROM node:20-alpine AS base
+# Use a lightweight Node.js image
+FROM node:18-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and install dependencies first (for better caching)
+# Copy package files first (for better build caching)
 COPY package*.json ./
-RUN npm install --production
 
-# Copy the rest of your bot files
+# Install dependencies — includes node-fetch@2 for require() support
+RUN npm install && npm install node-fetch@2
+
+# Copy all project files
 COPY . .
 
-# Expose the port your Express keep-alive server uses
+# Expose the bot's web server port
 EXPOSE 8080
 
-# Define environment variables (these will be overwritten by Railway or your .env)
+# Set environment variables (optional defaults)
 ENV NODE_ENV=production
+ENV PORT=8080
 
-# --- Stage 2: Run Bot ---
+# Start the bot
 CMD ["npm", "start"]
