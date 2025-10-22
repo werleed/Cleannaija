@@ -1,7 +1,7 @@
 {
   "name": "werleed-bot",
   "version": "1.0.0",
-  "description": "Telegram bot with Twilio OTP verification",
+  "description": "Telegram bot with Twilio OTP verification and admin features",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
@@ -10,9 +10,10 @@
     "axios": "^1.6.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "twilio": "^4.18.0",
     "node-telegram-bot-api": "^0.61.0",
-    "phonenumbers": "^1.1.1"
+    "phonenumbers": "^1.1.1",
+    "twilio": "^4.18.0",
+    "moment": "^2.29.4"
   },
   "engines": {
     "node": ">=18.x"
