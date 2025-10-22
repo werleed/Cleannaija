@@ -1,0 +1,12 @@
+{
+  "mode": "POLLING",
+  "withdrawals_enabled": true,
+  "online_scanning": true,
+  "offline_scanning": false,
+  "min_withdraw": 1000,
+  "price_per_kg": 50,
+  "languages": ["en","yo"],
+  "default_language": "en",
+  "twilio_enabled": false,
+  "admins": []
+}
