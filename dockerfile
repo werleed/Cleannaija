@@ -1,24 +1,23 @@
-FROM node:18-alpine
+# --- Clean9ja Bot Dockerfile ---
+FROM node:20-alpine
 
-# Create app dir
+# Set working directory
 WORKDIR /app
 
-# copy package information and install dependencies first (cache)
-COPY package.json package-lock.json* ./
+# Copy package.json and package-lock.json first for caching
+COPY package*.json ./
 
-RUN apk add --no-cache --virtual .gyp python3 make g++ \
- && npm ci --production \
- && apk del .gyp
+# Install all dependencies (including dev, then prune dev)
+RUN npm install && npm prune --omit=dev
 
-# copy app
+# Copy the rest of the application
 COPY . .
 
-# ensure data directory exists
-RUN mkdir -p /app/data
+# Set environment to production
+ENV NODE_ENV=production
 
-# port for health check (match code)
-ENV PORT=8080
-
+# Expose port for Express
 EXPOSE 8080
 
+# Start the bot (only one instance)
 CMD ["npm", "start"]
