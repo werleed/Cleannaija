@@ -484,5 +484,27 @@ process.on('unhandledRejection', (reason, p) => {
   console.error('Unhandled Rejection:', reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+  // ✅ Keep bot alive with Express (prevents Railway from stopping)
+const express = require('express');
+const fetch = require('node-fetch');
+const app = express();
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.get('/', (req, res) => {
+  res.send('🤖 Bot is live and healthy!');
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+
+  // 🟢 Ping itself every 4 minutes to stay awake
+  setInterval(() => {
+    fetch(`http://localhost:${PORT}/health`)
+      .then(() => console.log('✅ Keep-alive ping sent'))
+      .catch((err) => console.log('⚠️ Keep-alive failed:', err.message));
+  }, 240000); // every 4 minutes
 });
