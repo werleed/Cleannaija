@@ -1,4 +1,11 @@
 {
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  ...
+}
+{
   "name": "clean-naija-bot",
   "version": "1.0.0",
   "main": "bot.js",
@@ -11,11 +18,5 @@
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
     "twilio": "^4.21.0"
-  }
-}
-{
-  "type": "module",
-  "scripts": {
-    "start": "node server.js"
   }
 }
