@@ -1,2 +1,1 @@
-web: node server.js
-worker: node bot.js
+worker: npm start
