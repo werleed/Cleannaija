@@ -4,20 +4,15 @@ FROM node:18
 # Create app directory
 WORKDIR /app
 
-# Copy package.json & package-lock if present
+# Copy package files and install production deps
 COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Install dependencies (without dev)
-RUN npm install --omit=dev
-
-# Copy app source
+# Copy source
 COPY . .
 
-# Ensure data directories exist and permissions ok
-RUN mkdir -p /app/data /app/uploads && \
-    chown -R node:node /app
-
-USER node
+# Expose port (webhook mode)
+EXPOSE 8080
 
 # Start the bot
 CMD ["npm", "start"]
