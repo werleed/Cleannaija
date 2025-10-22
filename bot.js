@@ -1,452 +1,265 @@
-/**
- * clean9ja-bot (all-features, offline-safe)
- * - Multi-language
- * - Admin & user menus
- * - Twilio optional (if env provided) else offline OTP (in-chat)
- * - Image (photo) offline mock detection using Jimp
- * - Voice/audio: offline mock processing (length-based transcript placeholder)
- * - Robust error handling & no crash loops
- */
-
+// bot.js
+// Clean9ja unified bot + admin UI + mock Twilio
 require('dotenv').config();
 const fs = require('fs-extra');
 const path = require('path');
 const express = require('express');
+const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
-const Jimp = require('jimp');               // image processing (pure js)
-const multer = require('multer');           // used if later adding HTTP uploads
-const os = require('os');
 
-// Optional Twilio — only require if env present to avoid startup failures
-let twilioClient = null;
-const hasTwilio = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_VERIFY_SID);
-if (hasTwilio) {
-  try {
-    const twilio = require('twilio');
-    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    console.log('✅ Twilio client loaded (verification enabled).');
-  } catch (e) {
-    console.warn('⚠️ Twilio libs not installed or failed to load. Twilio disabled. Error:', e.message);
-  }
-}
-
-// --- env & checks ---
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const PORT = process.env.PORT || 8080;
-if (!TELEGRAM_TOKEN) {
-  console.error('❌ TELEGRAM_TOKEN missing. Add it to your environment variables.');
-  process.exit(1);
-}
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN || '';
 
-// --- Setup bot + web server ---
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true, request: { timeout: 15000 } });
-const app = express();
-app.use(express.json());
-
-// Serve health-check endpoint used by Railway
-app.get('/', (req, res) => res.send('🤖 Clean9ja Bot — healthy'));
-
-// Start express
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server listening on :${PORT}`));
-
-// --- Data storage (simple JSON files) ---
-const DATA_DIR = path.join(process.cwd(), 'data');
-fs.ensureDirSync(DATA_DIR);
+const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 
-function loadJSON(file, fallback = {}) {
+fs.ensureDirSync(DATA_DIR);
+
+// Helper to load/save JSON
+const loadJSON = (file, fallback) => {
   try {
-    if (!fs.existsSync(file)) return fallback;
+    if (!fs.existsSync(file)) {
+      fs.writeJsonSync(file, fallback ?? {}, { spaces: 2 });
+    }
     return fs.readJsonSync(file);
-  } catch (e) {
-    console.error(`Failed to load ${file}:`, e.message);
-    return fallback;
+  } catch (err) {
+    console.error('Failed to load JSON', file, err);
+    return fallback ?? {};
   }
-}
-function saveJSON(file, obj) {
-  try {
-    fs.writeJsonSync(file, obj, { spaces: 2 });
-  } catch (e) {
-    console.error(`Failed to save ${file}:`, e.message);
-  }
-}
+};
+const saveJSON = (file, obj) => fs.writeJsonSync(file, obj, { spaces: 2 });
 
-const usersDB = loadJSON(USERS_FILE, {});        // keyed by chatId
-const settings = loadJSON(SETTINGS_FILE, {
+// Initialize persistent files with safe defaults
+const defaultSettings = {
+  mode: 'POLLING', // or WEBHOOK
   withdrawals_enabled: true,
+  online_scanning: true,
+  offline_scanning: false,
   min_withdraw: 1000,
-  adminPhones: [],      // populate as needed
-});
-
-// --- Languages & messages ---
-const LANGUAGES = { en: 'English', ha: 'Hausa', yo: 'Yoruba', fr: 'French', tw: 'Twi' };
-
-const TEXTS = {
+  price_per_kg: 50,
+  languages: ['en', 'yo'],
+  default_language: 'en',
+  twilio_enabled: false,
+  admins: [], // put telegram user ids
+};
+const defaultMessages = {
   en: {
-    welcome: "👋 Welcome to Clean9ja Smart Waste System! Choose a language:",
-    chooseLangHint: "Tap a language to continue.",
-    askPhone: "Please send your phone number in international format (e.g. +2348012345678) to receive a verification code.",
-    otpSent: "📩 An OTP was sent. Enter the 6-digit code here. (If SMS not configured, the code will be sent inside this chat.)",
-    otpDeliveredInChat: "📩 No external SMS configured. Your OTP was delivered inside this chat for testing.",
-    verified: "✅ Verification successful. You now have access to the bot's features.",
-    invalidOTP: "❌ Invalid code. Please request a new code or try again.",
-    mainUser: "♻️ *User Menu*\n• /scan — Scan waste (send photo)\n• /estimate — Price estimate (send weight)\n• /points — Nearby collection points (mock)\n• /help — Support",
-    mainAdmin: "👨‍💼 *Admin Menu*\n• /users — List users\n• /broadcast — Send broadcast\n• /settings — View / modify settings",
-    scanProcessing: "🔍 Processing image. This is an offline estimate — results are simulated.\nPlease wait...",
-    scanResult: (label, priceStr) => `✅ Detected: *${label}*\nEstimated price: ${priceStr}\nNote: This is an offline estimate.`,
-    audioReceived: "🎧 Audio received. Performing offline analysis...",
-    audioResult: (transcript) => `📝 Transcript (simulated):\n"${transcript}"\n\nIf you'd like a proper transcription, enable external speech-to-text integration.`,
-    missingPhone: "⚠️ I didn't find a phone number for you. Send your phone first.",
-    twilioError: "❌ Failed to send SMS via Twilio. The bot will fall back to in-chat OTP.",
-    professionalError: "⚠️ An internal error occured. Our team has been notified (simulated). Please try again.",
+    welcome: "Welcome to Clean9ja Bot. Use the menu to interact with the service.",
+    min_withdraw: "You need at least ₦{min} to withdraw.",
+    withdrawal_disabled: "Withdrawals are currently disabled by admin.",
+    withdrawal_requested: "✅ Withdrawal request received. Admin will process it shortly.",
+    send_otp_prompt: "We will send you an OTP to verify your phone before using the bot.",
+    otp_sent: "An OTP has been sent to {phone}. Enter it to verify.",
+    otp_failed: "❌ Failed to send OTP. Admin must configure Twilio or use mock verification.",
+    otp_verified: "✅ Phone verified successfully. You may proceed.",
+    not_verified: "You must verify your phone before using this feature.",
+    professional_error: "An error occurred. Please try again or contact an admin.",
+    scan_online: "Online scanning started — analyzing image for waste...",
+    scan_offline: "Offline scanning started — please upload an image to scan.",
   },
-  ha: { /* short versions to keep example concise */ 
-    welcome: "👋 Barka da zuwa Clean9ja! Zaɓi harshe:",
-    chooseLangHint: "Zaɓi yaren ka don ci gaba.",
-    askPhone: "Aika lambar wayarka (+234...).",
-    otpSent: "📩 An aika OTP. Shigar da lambobin 6.",
-    otpDeliveredInChat: "📩 Ba a daidaita SMS ba. OTP ɗin an aiko a cikin tattaunawa.",
-    verified: "✅ An tabbatar. Yanzu zaka iya amfani.",
-    mainUser: "♻️ *Menu*\n/scan /estimate /points /help",
-    mainAdmin: "👨‍💼 *Admin*\n/users /broadcast /settings",
-    scanProcessing: "🔍 Ana dubawa (simulated)...",
-    scanResult: (label, priceStr) => `✅ An gano: *${label}*\nFarashi: ${priceStr}`,
-    audioReceived: "🎧 An karɓi audio...",
-    audioResult: (t) => `📝 Transcript (sim): "${t}"`,
-    missingPhone: "⚠️ Ba a same wayar ka ba.",
-    twilioError: "❌ Twilio ya kasa — za a yi fallback.",
-    professionalError: "⚠️ Kuskurena ya faru. Gwada sake."
-  },
-  // For brevity, reuse English keys for other langs in this template.
-  yo: {}, fr: tw: {}
+  yo: {
+    welcome: "Kaabo si Clean9ja Bot. Lo menu lati ba eto sọrọ.",
+    min_withdraw: "O nilo o kere ₦{min} lati fa owo.",
+    withdrawal_disabled: "A ko gba awọn yiyọ kuro lọwọlọwọ nipasẹ admin.",
+    // ... other messages can be added
+  }
 };
 
-// Fill missing with en fallback
-['yo','fr','tw'].forEach(k => { if(!TEXTS[k]) TEXTS[k] = TEXTS.en; });
+const users = loadJSON(USERS_FILE, {});
+const settings = loadJSON(SETTINGS_FILE, defaultSettings);
+const messages = loadJSON(MESSAGES_FILE, defaultMessages);
 
-// --- Helpers ---
-function getLang(chatId) {
-  return usersDB[chatId]?.language || 'en';
-}
-function sendProfessional(botChatId, lang, text, extra = {}) {
-  try {
-    return bot.sendMessage(botChatId, text, Object.assign({ parse_mode: 'Markdown' }, extra));
-  } catch (e) {
-    console.error('sendProfessional error:', e.message);
-  }
+saveJSON(USERS_FILE, users);
+saveJSON(SETTINGS_FILE, settings);
+saveJSON(MESSAGES_FILE, messages);
+
+// utility message function (language templating)
+function message(key, user = {}, params = {}) {
+  const lang = (user.lang || settings.default_language || 'en');
+  const langMessages = messages[lang] || messages['en'];
+  let text = langMessages[key] || messages['en'][key] || key;
+  for (const k in params) text = text.replace(`{${k}}`, params[k]);
+  // support also numeric placeholders from settings
+  text = text.replace('{min}', settings.min_withdraw);
+  return text;
 }
 
-// --- Language selection flow ---
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const keyboard = {
-    reply_markup: {
-      keyboard: Object.values(LANGUAGES).map(l => [{ text: l }]),
-      one_time_keyboard: true,
-      resize_keyboard: true
-    }
-  };
-  sendProfessional(chatId, 'en', TEXTS.en.welcome + '\n' + TEXTS.en.chooseLangHint, keyboard);
+// Mock Twilio module (no external API)
+const mockTwilio = require('./mock-twilio');
+
+// Create or re-use bot
+if (!TELEGRAM_TOKEN) {
+  console.warn('TELEGRAM_TOKEN not provided — bot will not connect to Telegram until set.');
+}
+const botOptions = { polling: true };
+const bot = new TelegramBot(TELEGRAM_TOKEN, botOptions);
+
+// Express admin UI
+const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
+
+// simple auth for admin panel: check token in query or header (basic)
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'adminsecret';
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'] || req.query.token || req.body.token;
+  if (token === ADMIN_SECRET) return next();
+  return res.status(401).send('Unauthorized');
+}
+
+// Admin routes (JSON)
+app.get('/admin/settings', requireAdmin, (req, res) => {
+  res.json(loadJSON(SETTINGS_FILE, defaultSettings));
+});
+app.post('/admin/settings', requireAdmin, (req, res) => {
+  const incoming = req.body;
+  const cur = loadJSON(SETTINGS_FILE, defaultSettings);
+  const updated = { ...cur, ...incoming };
+  saveJSON(SETTINGS_FILE, updated);
+  res.json({ ok: true, settings: updated });
+});
+app.get('/admin/users', requireAdmin, (req, res) => {
+  res.json(loadJSON(USERS_FILE, {}));
+});
+app.post('/admin/users/:id', requireAdmin, (req, res) => {
+  const uid = req.params.id;
+  const allUsers = loadJSON(USERS_FILE, {});
+  allUsers[uid] = { ...allUsers[uid], ...req.body };
+  saveJSON(USERS_FILE, allUsers);
+  res.json({ ok: true, user: allUsers[uid] });
 });
 
-// Handle language selection
+// Simple admin basic page
+app.get('/admin', requireAdmin, (req, res) => {
+  const s = loadJSON(SETTINGS_FILE, defaultSettings);
+  res.send(`
+    <h2>Clean9ja Admin</h2>
+    <p>Use POST /admin/settings with JSON (header x-admin-token:${ADMIN_SECRET})</p>
+    <pre>${JSON.stringify(s, null, 2)}</pre>
+  `);
+});
+
+// Health check for Railway
+app.get('/_health', (req, res) => res.send('ok'));
+
+// Start express server
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
+// Bot logic: message handling
+bot.on('polling_error', (err) => {
+  console.error('Polling error:', err && err.code ? `${err.code} ${err.response?.body || err.message}` : err);
+});
+
 bot.on('message', async (msg) => {
   try {
-    if (!msg.text) return; // ignore non-text here (photos handled separately)
+    const chatId = msg.chat.id.toString();
+    const text = (msg.text || '').trim();
 
-    const chatId = msg.chat.id;
-    const text = msg.text.trim();
-    // If user sends a language name
-    const selected = Object.entries(LANGUAGES).find(([, name]) => name.toLowerCase() === text.toLowerCase());
-    if (selected) {
-      const [code] = selected;
-      usersDB[chatId] = usersDB[chatId] || {};
-      usersDB[chatId].language = code;
-      saveJSON(USERS_FILE, usersDB);
-      sendProfessional(chatId, code, TEXTS[code].askPhone);
+    // ensure user exists
+    const allUsers = loadJSON(USERS_FILE, {});
+    if (!allUsers[chatId]) {
+      allUsers[chatId] = { id: chatId, lang: settings.default_language, balance: 0, verified: false, awaiting_withdraw: false };
+      saveJSON(USERS_FILE, allUsers);
+    }
+    const user = allUsers[chatId];
+
+    // simple commands
+    if (text === '/start' || text.toLowerCase() === 'hi' || text.toLowerCase() === 'hello') {
+      await bot.sendMessage(chatId, message('welcome', user));
       return;
     }
 
-    // If text looks like phone starting with +
-    if (text.startsWith('+')) {
-      const phone = text;
-      const lang = getLang(chatId);
-      usersDB[chatId] = usersDB[chatId] || {};
-      usersDB[chatId].phone = phone;
-      saveJSON(USERS_FILE, usersDB);
-      // send OTP via Twilio if configured, else send OTP in-chat
-      await sendOTPFlow(chatId, phone, lang);
-      return;
-    }
-
-    // Commands (helpful fallback)
-    if (text === '/help' || text.toLowerCase() === 'help') {
-      const lang = getLang(chatId);
-      return sendProfessional(chatId, lang, TEXTS[lang].mainUser);
-    }
-
-    // If user sends numeric OTP attempt (6 digits)
-    if (/^\d{4,6}$/.test(text)) {
-      const lang = getLang(chatId);
-      return verifyOTPAttempt(chatId, text, lang);
-    }
-
-    // admin commands
-    if (text.startsWith('/broadcast')) {
-      const lang = getLang(chatId);
-      const phone = usersDB[chatId]?.phone;
-      if (!isAdminPhone(phone)) return sendProfessional(chatId, lang, 'Unauthorized. Only admins allowed.');
-      const msgToSend = text.replace('/broadcast', '').trim();
-      if (!msgToSend) return sendProfessional(chatId, lang, 'Usage: /broadcast <message>');
-      // send to all verified users
-      const broadcastTargets = Object.entries(usersDB).filter(([,u]) => u.verified).map(([id]) => id);
-      for (const id of broadcastTargets) {
-        try { await bot.sendMessage(id, `📣 Broadcast from Admin:\n\n${msgToSend}`); } catch(e) { console.warn('broadcast fail for', id, e.message); }
-      }
-      return sendProfessional(chatId, lang, `✅ Broadcast sent to ${broadcastTargets.length} users.`);
-    }
-
-    // /users admin
-    if (text === '/users') {
-      const lang = getLang(chatId);
-      if (!isAdminPhone(usersDB[chatId]?.phone)) return sendProfessional(chatId, lang, 'Unauthorized.');
-      const list = Object.entries(usersDB).map(([id,u]) => `${id} — ${u.phone||'no-phone'} — ${u.verified ? 'verified' : 'unverified'}`).slice(0, 2000).join('\n') || 'No users';
-      return sendProfessional(chatId, lang, `👥 Users:\n${list}`);
-    }
-
-    // /scan command hint
-    if (text === '/scan') {
-      const lang = getLang(chatId);
-      return sendProfessional(chatId, lang, `📸 Please send a photo of the waste you'd like to scan.`);
-    }
-
-    // /estimate expects "weight kg" e.g. "2.5kg" or "2.5 kg"
-    const estimateMatch = text.match(/^(\d+(\.\d+)?)\s?kg$/i);
-    if (estimateMatch) {
-      const lang = getLang(chatId);
-      const weight = parseFloat(estimateMatch[1]);
-      const pricePerKg = 150; // offline configured value; could come from settings
-      const total = (weight * pricePerKg).toFixed(2);
-      return sendProfessional(chatId, lang, `📦 Estimated price for ${weight} kg: ₦${total}`);
-    }
-
-    // default reply
-    // keep it professional
-    const lang = getLang(chatId);
-    return sendProfessional(chatId, lang, "I didn't quite understand that. Use /scan, /estimate (e.g. '2.5kg'), or send a photo to scan.");
-  } catch (err) {
-    console.error('message handler error:', err);
-    const chatId = msg.chat?.id;
-    if (chatId) sendProfessional(chatId, getLang(chatId), TEXTS.en.professionalError);
-  }
-});
-
-// --- OTP flow (Twilio optional, fallback to in-chat codes) ---
-const otpStore = {}; // chatId -> { code, phone, expiresAt }
-
-async function sendOTPFlow(chatId, phone, lang) {
-  try {
-    const code = (Math.floor(100000 + Math.random() * 900000)).toString(); // 6-digit
-    const expiresAt = Date.now() + 5 * 60 * 1000;
-    otpStore[chatId] = { code, phone, expiresAt };
-
-    if (twilioClient && hasTwilio) {
-      // Try Twilio Verify if available
-      try {
-        await twilioClient.verify.services(process.env.TWILIO_VERIFY_SID)
-          .verifications.create({ to: phone, channel: 'sms' });
-        sendProfessional(chatId, lang, TEXTS[lang].otpSent);
-        // we won't store Twilio code locally — Twilio will check it
+    // request verification (phone) - flow uses mock twilio
+    if (text.toLowerCase().startsWith('verify')) {
+      // expect phone: verify +234xxxxxxxxx
+      const parts = text.split(/\s+/);
+      const phone = parts[1];
+      if (!phone) return bot.sendMessage(chatId, 'Usage: verify <phone_number>');
+      if (!settings.twilio_enabled) {
+        // use mock OTP: generate and store
+        const otp = mockTwilio.generateOTP(chatId);
+        user.pending_otp = otp;
+        saveJSON(USERS_FILE, allUsers);
+        await bot.sendMessage(chatId, message('otp_sent', user, { phone }));
+        await bot.sendMessage(chatId, `🔐 Mock OTP: ${otp} (for testing only)`);
         return;
-      } catch (e) {
-        console.warn('Twilio send failed, falling back to chat OTP:', e.message);
-        sendProfessional(chatId, lang, TEXTS[lang].twilioError);
-        // fall through to in-chat OTP
-      }
-    }
-
-    // Fallback: deliver OTP in-chat (development / offline mode)
-    sendProfessional(chatId, lang, `${TEXTS[lang].otpDeliveredInChat}\n\n🔐 OTP: *${code}* (expires in 5 minutes)`, { parse_mode: 'Markdown' });
-    sendProfessional(chatId, lang, TEXTS[lang].otpSent);
-  } catch (e) {
-    console.error('sendOTPFlow error:', e);
-    sendProfessional(chatId, getLang(chatId) || 'en', TEXTS.en.professionalError);
-  }
-}
-
-async function verifyOTPAttempt(chatId, codeText, lang) {
-  try {
-    // If Twilio configured, call verification endpoint
-    if (twilioClient && hasTwilio) {
-      const phone = usersDB[chatId]?.phone;
-      if (!phone) return sendProfessional(chatId, lang, TEXTS[lang].missingPhone);
-      // Use Twilio Verify checks
-      try {
-        const res = await twilioClient.verify.services(process.env.TWILIO_VERIFY_SID)
-          .verificationChecks.create({ to: phone, code: codeText });
-        if (res.status === 'approved') {
-          usersDB[chatId] = usersDB[chatId] || {};
-          usersDB[chatId].verified = true;
-          saveJSON(USERS_FILE, usersDB);
-          return sendProfessional(chatId, lang, TEXTS[lang].verified);
+      } else {
+        // if twilio_enabled true but no credentials, return professional error
+        const sent = await mockTwilio.sendOTP(phone); // mock wrapper that returns success/fail
+        if (sent.success) {
+          user.pending_otp = sent.otp;
+          saveJSON(USERS_FILE, allUsers);
+          return bot.sendMessage(chatId, message('otp_sent', user, { phone }));
         } else {
-          return sendProfessional(chatId, lang, TEXTS[lang].invalidOTP);
+          return bot.sendMessage(chatId, message('otp_failed', user));
         }
-      } catch (e) {
-        console.warn('Twilio verify failed:', e.message);
-        // fallthrough to local check
       }
     }
 
-    // Local check
-    const entry = otpStore[chatId];
-    if (!entry) return sendProfessional(chatId, lang, TEXTS[lang].invalidOTP);
-    if (Date.now() > entry.expiresAt) { delete otpStore[chatId]; return sendProfessional(chatId, lang, '❌ OTP expired. Request a new one.'); }
-    if (entry.code === codeText) {
-      usersDB[chatId] = usersDB[chatId] || {};
-      usersDB[chatId].verified = true;
-      usersDB[chatId].phone = entry.phone;
-      saveJSON(USERS_FILE, usersDB);
-      delete otpStore[chatId];
-      return sendProfessional(chatId, lang, TEXTS[lang].verified);
-    } else {
-      return sendProfessional(chatId, lang, TEXTS[lang].invalidOTP);
+    // OTP verification
+    if (/^\d{4,6}$/.test(text)) {
+      if (user.pending_otp && text === String(user.pending_otp)) {
+        user.verified = true;
+        delete user.pending_otp;
+        saveJSON(USERS_FILE, allUsers);
+        return bot.sendMessage(chatId, message('otp_verified', user));
+      } else {
+        return bot.sendMessage(chatId, '❌ Incorrect OTP. Please request a new one by sending: verify <phone>');
+      }
     }
-  } catch (e) {
-    console.error('verifyOTPAttempt error:', e.message);
-    return sendProfessional(chatId, lang, TEXTS[lang].professionalError);
-  }
-}
 
-// --- Helper: is admin phone ---
-function isAdminPhone(phone) {
-  if (!phone) return false;
-  const adminPhones = settings.adminPhones || [];
-  // Accept exact match; normalize simple
-  return adminPhones.includes(phone);
-}
-
-// --- Photo handler: offline/mock detection with Jimp ---
-bot.on('photo', async (msg) => {
-  try {
-    const chatId = msg.chat.id;
-    const lang = getLang(chatId);
-    if (!usersDB[chatId]?.verified) return sendProfessional(chatId, lang, TEXTS[lang].missingPhone);
-
-    sendProfessional(chatId, lang, TEXTS[lang].scanProcessing);
-    // pick the highest resolution photo
-    const photos = msg.photo;
-    const best = photos[photos.length - 1];
-    const fileId = best.file_id;
-
-    // download file buffer
-    const file = await bot.getFile(fileId);
-    const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
-    const res = await fetch(url);
-    const buffer = await res.buffer();
-
-    // Process image with Jimp (offline heuristic):
-    const image = await Jimp.read(buffer);
-    // Resize to moderate size for analysis
-    image.resize(300, Jimp.AUTO);
-
-    // Compute average color for simple heuristics
-    let rSum = 0, gSum = 0, bSum = 0;
-    const w = image.bitmap.width;
-    const h = image.bitmap.height;
-    image.scan(0, 0, w, h, function(x, y, idx) {
-      rSum += this.bitmap.data[idx + 0];
-      gSum += this.bitmap.data[idx + 1];
-      bSum += this.bitmap.data[idx + 2];
-    });
-    const pxCount = w * h;
-    const rAvg = Math.round(rSum / pxCount);
-    const gAvg = Math.round(gSum / pxCount);
-    const bAvg = Math.round(bSum / pxCount);
-
-    // Simple rule-based label detection (offline heuristic)
-    let label = 'Mixed/Unknown waste';
-    let priceStr = '₦100/kg (estimate)';
-    // heuristics: if bright/translucent-ish => plastic
-    if (rAvg > 180 && gAvg > 180 && bAvg > 180) { label = 'Plastic (likely PET)'; priceStr = '₦150/kg'; }
-    else if (rAvg < 80 && gAvg < 80 && bAvg < 80) { label = 'Metal (likely cans)'; priceStr = '₦200/kg'; }
-    else if (gAvg > rAvg && gAvg > bAvg + 10) { label = 'Organic/Plant waste'; priceStr = '₦40/kg'; }
-    else label = 'Mixed recyclables';
-
-    sendProfessional(chatId, lang, TEXTS[lang].scanResult(label, priceStr));
-  } catch (e) {
-    console.error('photo handler err:', e.message);
-    sendProfessional(msg.chat.id, getLang(msg.chat.id), TEXTS[getLang(msg.chat.id)].professionalError);
-  }
-});
-
-// --- Audio handler (voice notes or audio) ---
-bot.on('voice', async (msg) => {
-  try {
-    const chatId = msg.chat.id;
-    const lang = getLang(chatId);
-    if (!usersDB[chatId]?.verified) return sendProfessional(chatId, lang, TEXTS[lang].missingPhone);
-
-    sendProfessional(chatId, lang, TEXTS[lang].audioReceived);
-
-    // Download voice file
-    const fileId = msg.voice.file_id;
-    const file = await bot.getFile(fileId);
-    const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
-    const res = await fetch(url);
-    const buffer = await res.buffer();
-    // Simulated analysis: base transcript on length
-    const durationSec = msg.voice.duration || Math.round(buffer.length / 10000);
-    let transcript = '';
-    if (durationSec < 3) transcript = 'Short voice note: user says hello.';
-    else if (durationSec < 10) transcript = 'User describes waste and asks for pickup.';
-    else transcript = 'Longer message: user gave details about waste quantity and pickup preference.';
-    sendProfessional(chatId, lang, TEXTS[lang].audioResult(transcript));
-  } catch (e) {
-    console.error('voice handler:', e);
-    sendProfessional(msg.chat.id, getLang(msg.chat.id), TEXTS[getLang(msg.chat.id)].professionalError);
-  }
-});
-
-// Also accept generic audio/document uploads (mp3/wav)
-bot.on('document', async (msg) => {
-  try {
-    const mime = msg.document.mime_type || '';
-    if (mime.startsWith('audio/') || mime === 'application/octet-stream') {
-      // treat like audio
-      return bot.emit('voice', Object.assign({}, msg, { voice: { file_id: msg.document.file_id, duration: msg.document.file_size ? Math.round(msg.document.file_size / 10000) : 5 } }));
+    // Withdraw
+    if (text === '💰 Withdraw' || text.toLowerCase().includes('withdraw')) {
+      if (!settings.withdrawals_enabled) return bot.sendMessage(chatId, message('withdrawal_disabled', user));
+      if ((user.balance || 0) < settings.min_withdraw) return bot.sendMessage(chatId, message('min_withdraw', user, { min: settings.min_withdraw }));
+      user.awaiting_withdraw = true;
+      saveJSON(USERS_FILE, allUsers);
+      return bot.sendMessage(chatId, message('withdrawal_requested', user));
     }
-  } catch (e) {
-    console.error('document handler:', e.message);
+
+    // Scan commands (mock detection)
+    if (text.toLowerCase().includes('scan online')) {
+      if (!settings.online_scanning) return bot.sendMessage(chatId, 'Online scanning currently disabled by admin.');
+      // pretend to scan; in real usage you'd hook image handlers
+      return bot.sendMessage(chatId, message('scan_online', user));
+    }
+    if (text.toLowerCase().includes('scan offline')) {
+      if (!settings.offline_scanning) return bot.sendMessage(chatId, 'Offline scanning disabled by admin.');
+      return bot.sendMessage(chatId, message('scan_offline', user));
+    }
+
+    // Admin-only commands to toggle (if user id in settings.admins)
+    if (text.startsWith('/admin')) {
+      const isAdmin = settings.admins.includes(Number(chatId));
+      if (!isAdmin) return bot.sendMessage(chatId, 'Unauthorized: admin only.');
+      // parse admin commands: /admin set price 80
+      const tokens = text.split(/\s+/);
+      if (tokens[1] === 'set' && tokens[2] === 'price') {
+        const p = Number(tokens[3]);
+        if (isNaN(p)) return bot.sendMessage(chatId, 'Price must be a number.');
+        settings.price_per_kg = p;
+        saveJSON(SETTINGS_FILE, settings);
+        return bot.sendMessage(chatId, `Price updated to ₦${p} per kg`);
+      }
+      return bot.sendMessage(chatId, 'Admin commands: /admin set price <n>');
+    }
+
+    // Fallback
+    return bot.sendMessage(chatId, "I didn't understand that. Send /start or use the menu.");
+  } catch (err) {
+    console.error('Error handling message:', err);
+    try { await bot.sendMessage(msg.chat.id, 'An internal error occurred. Admin has been notified.'); } catch(e){}
   }
 });
 
-// --- Periodic online/offline check (non-blocking) ---
-setInterval(async () => {
-  try {
-    // small HEAD to Telegram API base — no heavy payload
-    await fetch('https://api.telegram.org');
-    console.log('📶 Telegram reachable (bot likely online).');
-  } catch (e) {
-    console.log('⚠️ Telegram unreachable — running in offline/local simulation mode.');
-  }
-}, 5 * 60 * 1000);
-
-// --- Safety handlers to prevent container crash loops ---
-process.on('uncaughtException', err => {
-  console.error('uncaughtException:', err && err.stack ? err.stack : err);
-});
-process.on('unhandledRejection', err => {
-  console.error('unhandledRejection:', err && err.stack ? err.stack : err);
-});
-
-// Save DB on graceful exit
-async function shutdown() {
-  console.log('Shutting down... saving data.');
-  saveJSON(USERS_FILE, usersDB);
-  saveJSON(SETTINGS_FILE, settings);
+// Graceful save on exit
+process.on('SIGTERM', () => {
+  console.info('SIGTERM received, saving files and exiting');
+  saveJSON(USERS_FILE, loadJSON(USERS_FILE, {}));
+  saveJSON(SETTINGS_FILE, loadJSON(SETTINGS_FILE, defaultSettings));
   process.exit(0);
-}
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+});
