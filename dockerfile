@@ -1,23 +1,26 @@
-# Use Node.js 18 LTS
+# Use Node 18 LTS (alpine)
 FROM node:18-alpine
 
-# Set working directory
+# set workdir
 WORKDIR /app
 
-# Copy package metadata first (to leverage Docker cache)
-COPY public/package*.json ./
+# Install minimal build deps for some npm packages if necessary
+# jimp and these deps usually work without extra packages but we include them quietly
+RUN apk add --no-cache bash build-base
 
-# Install dependencies (production)
-RUN npm install --omit=dev
+# Copy package files and install
+COPY package.json package-lock.json* ./
+RUN npm install --no-optional --production
 
-# Copy app source (assumes your project files are in public/)
-COPY public .
+# Copy app
+COPY . .
 
-# Ensure data and uploads folders exist (optional, done at runtime too)
-RUN mkdir -p data uploads
+# Create data dir
+RUN mkdir -p /app/data
+VOLUME [ "/app/data" ]
 
-# Expose port for Railway health checks
+# Expose port used by Railway/Health checks
 EXPOSE 8080
 
-# Start the bot
+# start
 CMD ["npm", "start"]
