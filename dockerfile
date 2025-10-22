@@ -1,24 +1,25 @@
-# Use a lightweight Node.js image
+# ---------- Base image ----------
 FROM node:18-alpine
 
-# Set working directory
+# ---------- App setup ----------
 WORKDIR /app
-
-# Copy package files first (for better build caching)
 COPY package*.json ./
 
-# Install dependencies — includes node-fetch@2 for require() support
-RUN npm install && npm install node-fetch@2
+# Install production deps (and node-fetch for keep-alive)
+RUN npm install --omit=dev && npm install node-fetch@2
 
-# Copy all project files
 COPY . .
 
-# Expose the bot's web server port
-EXPOSE 8080
-
-# Set environment variables (optional defaults)
+# ---------- Runtime configuration ----------
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# Start the bot
+EXPOSE 8080
+
+# ---------- Health check ----------
+# Railway will ping this to verify your container is alive
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
+  CMD wget -qO- http://localhost:8080/health || exit 1
+
+# ---------- Start command ----------
 CMD ["npm", "start"]
