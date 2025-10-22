@@ -1,16 +1,36 @@
 {
-  "name": "clean9ja-bot",
+  "name": "clean9ja-telegram-twilio-bot",
   "version": "1.0.0",
+  "description": "A Telegram bot with Twilio phone verification and admin/user features for Clean9ja (Werleed Bot).",
   "main": "bot.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "dotenv": "^16.3.1",
-    "twilio": "^4.20.0",
-    "axios": "^1.6.8",
-    "node-telegram-bot-api": "^0.64.0"
-  }
+    "axios": "^1.7.2",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.6.2",
+    "node-telegram-bot-api": "^0.61.0",
+    "twilio": "^4.19.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "telegram-bot",
+    "twilio-verification",
+    "clean9ja",
+    "werleed",
+    "otp",
+    "express"
+  ],
+  "author": "Clean9ja Team",
+  "license": "MIT"
 }
