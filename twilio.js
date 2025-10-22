@@ -1,41 +1,30 @@
-// twilio.js
-require('dotenv').config();
 const twilio = require('twilio');
+require('dotenv').config();
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
-const VERIFY_SID = process.env.TWILIO_VERIFY_SID;
+const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
 
 module.exports = {
-  // Start OTP verification
   async startVerify(phone) {
     try {
-      const res = await client.verify.v2
-        .services(VERIFY_SID)
-        .verifications.create({ to: `+${phone}`, channel: 'sms' });
-      return { success: true, sid: res.sid };
+      const verification = await client.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID)
+        .verifications.create({ to: phone, channel: 'sms' });
+      return { success: true, sid: verification.sid };
     } catch (err) {
-      console.error('Twilio startVerify error:', err.message);
+      console.error('Twilio Verify error:', err.message);
       return { success: false, error: err.message };
     }
   },
 
-  // Check OTP code
   async checkVerify(phone, code) {
     try {
-      const res = await client.verify.v2
-        .services(VERIFY_SID)
-        .verificationChecks.create({ to: `+${phone}`, code });
-      if (res.status === 'approved') {
-        return { success: true };
-      }
-      return { success: false, error: 'Invalid code' };
+      const check = await client.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID)
+        .verificationChecks.create({ to: phone, code });
+      return check.status === 'approved';
     } catch (err) {
-      console.error('Twilio checkVerify error:', err.message);
-      return { success: false, error: err.message };
+      console.error('Twilio Check error:', err.message);
+      return false;
     }
   },
 };
