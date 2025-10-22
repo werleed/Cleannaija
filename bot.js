@@ -483,8 +483,19 @@ process.on('SIGTERM', shutDown);
 process.on('unhandledRejection', (reason, p) => {
   console.error('Unhandled Rejection:', reason);
 });
+process.on('SIGINT', shutDown);
+process.on('SIGTERM', shutDown);
+
+// --- global error handlers ---
+process.on('unhandledRejection', (reason, p) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
 process.on('uncaughtException', (err) => {
-  // ✅ Keep bot alive with Express (prevents Railway from stopping)
+  console.error('Uncaught Exception:', err);
+});
+
+// ✅ Keep bot alive with Express (prevents Railway from stopping)
 const express = require('express');
 const fetch = require('node-fetch');
 const app = express();
