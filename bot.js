@@ -2,222 +2,144 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
-const twilio = require('twilio');
+const twilio = require('./twilio');
 
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 
-// Twilio setup
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-const VERIFY_SID = process.env.TWILIO_VERIFY_SID;
-
-// Data folder setup
+// === Data files ===
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
-if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]', 'utf8');
+const WASTE_FILE = path.join(DATA_DIR, 'waste.json');
 
-// Load & save helpers
-function readUsers() {
-  try { return JSON.parse(fs.readFileSync(USERS_FILE)); } catch { return []; }
+function loadData(file) {
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : {};
 }
-function saveUsers(data) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
-}
-function findUser(id) {
-  return readUsers().find(u => u.id === id);
-}
-function updateUser(u) {
-  const users = readUsers();
-  const idx = users.findIndex(x => x.id === u.id);
-  if (idx >= 0) users[idx] = u; else users.push(u);
-  saveUsers(users);
+function saveData(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// ✅ OTP pending memory
-const pending = {};
+let users = loadData(USERS_FILE);
+let wasteRates = { plastic: 50, metal: 80, paper: 30 }; // ₦ per kg
 
-// 🧍 Start Command
+function saveUsers() { saveData(USERS_FILE, users); }
+
+// === START BOT ===
 bot.start(async (ctx) => {
-  const user = ctx.from;
-  let u = findUser(user.id);
-  if (!u) {
-    u = {
-      id: user.id,
-      username: user.username || '',
-      name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
-      verified: false,
-      phone: null,
-      balance: 0,
-      waste: 0,
-      complaints: []
-    };
-    updateUser(u);
+  const id = ctx.from.id;
+  if (!users[id]) {
+    users[id] = { id, verified: false, balance: 0, name: ctx.from.first_name };
+    saveUsers();
   }
-
-  if (!u.verified) {
+  await ctx.reply('👋 Welcome to *Clean Naija Bot*!', { parse_mode: 'Markdown' });
+  if (!users[id].verified) {
     return ctx.reply(
-      "👋 Welcome to *Clean Naija Waste Bot!*\n\nPlease verify your phone number first to continue.",
-      Markup.keyboard([[{ text: "📱 Share My Number", request_contact: true }]]).resize().oneTime()
+      '📱 Please verify your phone number to continue.',
+      Markup.keyboard([[{ text: 'Share My Number 📞', request_contact: true }]]).oneTime().resize()
     );
   }
+  return ctx.reply('✅ You are already verified! Use /menu to continue.');
+});
 
+// === HANDLE CONTACT ===
+bot.on('contact', async (ctx) => {
+  const contact = ctx.message.contact;
+  const user = users[ctx.from.id];
+  user.phone = contact.phone_number.startsWith('+')
+    ? contact.phone_number
+    : '+' + contact.phone_number;
+  saveUsers();
+  ctx.reply('📩 Sending OTP to ' + user.phone);
+  const res = await twilio.startVerify(user.phone);
+  if (res.success) {
+    user.pending = true;
+    saveUsers();
+    ctx.reply('Enter the 6-digit code you received via SMS:');
+  } else ctx.reply('❌ Failed to send OTP: ' + res.error);
+});
+
+// === HANDLE OTP ===
+bot.on('text', async (ctx) => {
+  const id = ctx.from.id;
+  const user = users[id];
+  const text = ctx.message.text.trim();
+
+  if (user && user.pending && /^\d{4,6}$/.test(text)) {
+    const ok = await twilio.checkVerify(user.phone, text);
+    if (ok) {
+      user.verified = true;
+      delete user.pending;
+      saveUsers();
+      return ctx.reply('✅ Verification successful! Use /menu.');
+    } else return ctx.reply('❌ Wrong code. Try again.');
+  }
+});
+
+// === MENU ===
+bot.command('menu', async (ctx) => {
+  if (!users[ctx.from.id]?.verified)
+    return ctx.reply('⚠️ Please verify your phone number first.');
   ctx.reply(
-    `✅ Welcome back ${u.name}!`,
+    '📋 *Main Menu*',
     Markup.inlineKeyboard([
-      [Markup.button.callback("♻️ Report Waste", "report_waste")],
-      [Markup.button.callback("💰 Withdraw", "withdraw")],
-      [Markup.button.callback("📊 My Stats", "my_stats")],
-      [Markup.button.callback("🗣️ Complain", "complain")]
+      [Markup.button.callback('♻️ Scan Waste', 'SCAN')],
+      [Markup.button.callback('💰 Withdraw', 'WITHDRAW')],
+      [Markup.button.callback('📞 Complain', 'COMPLAIN')],
+      [Markup.button.callback('ℹ️ My Info', 'INFO')],
     ])
   );
 });
 
-// 📱 Contact Handler (Start verification)
-bot.on('contact', async (ctx) => {
-  const contact = ctx.message.contact;
-  const phone = contact.phone_number.replace(/\s|\+/g, '');
-  const id = ctx.from.id;
-  const user = findUser(id);
-
-  ctx.reply(`Sending OTP to ${phone}...`);
-
-  try {
-    await client.verify.v2.services(VERIFY_SID).verifications.create({
-      to: `+${phone}`,
-      channel: 'sms'
-    });
-    pending[id] = { phone };
-    ctx.reply("✅ OTP sent! Please enter the 6-digit code.");
-  } catch (err) {
-    ctx.reply("❌ Failed to send OTP. Please check Twilio credentials or try again.");
-  }
+// === CALLBACK HANDLERS ===
+bot.action('SCAN', (ctx) => {
+  ctx.reply('Enter waste type (plastic, metal, paper):');
+  users[ctx.from.id].step = 'waste_type';
+  saveUsers();
 });
 
-// 💬 Message handler for OTP input
 bot.on('text', async (ctx) => {
   const id = ctx.from.id;
-  const user = findUser(id);
-  const text = ctx.message.text.trim();
+  const user = users[id];
+  const msg = ctx.message.text.toLowerCase();
 
-  // If OTP pending
-  if (pending[id]) {
-    if (!/^\d{6}$/.test(text)) return ctx.reply("Please enter a valid 6-digit code.");
-    try {
-      const result = await client.verify.v2.services(VERIFY_SID).verificationChecks.create({
-        to: `+${pending[id].phone}`,
-        code: text
-      });
-      if (result.status === "approved") {
-        delete pending[id];
-        user.phone = result.to;
-        user.verified = true;
-        updateUser(user);
-        return ctx.reply("✅ Verification successful! You can now use the bot.",
-          Markup.removeKeyboard());
-      }
-      return ctx.reply("❌ Invalid OTP. Try again.");
-    } catch (err) {
-      return ctx.reply("⚠️ Error verifying code. Try again later.");
-    }
+  if (user?.step === 'waste_type') {
+    if (!wasteRates[msg]) return ctx.reply('Invalid type. Try: plastic, metal, or paper.');
+    user.currentType = msg;
+    user.step = 'waste_weight';
+    saveUsers();
+    return ctx.reply('Enter weight in kg:');
+  }
+
+  if (user?.step === 'waste_weight') {
+    const kg = parseFloat(msg);
+    if (isNaN(kg) || kg <= 0) return ctx.reply('Please enter a valid weight.');
+    const earn = kg * wasteRates[user.currentType];
+    user.balance += earn;
+    user.step = null;
+    saveUsers();
+    return ctx.reply(`✅ Recorded! You earned ₦${earn.toFixed(2)}.\n💰 New balance: ₦${user.balance}`);
   }
 });
 
-// ♻️ Report Waste
-bot.action("report_waste", async (ctx) => {
-  const user = findUser(ctx.from.id);
-  if (!user || !user.verified) return ctx.reply("Please verify your account first.");
-  await ctx.reply("♻️ Enter the waste weight (in KG):");
-  user.awaitingWeight = true;
-  updateUser(user);
-});
-
-// Handle waste input
-bot.on('message', (ctx) => {
-  const id = ctx.from.id;
-  const user = findUser(id);
-  const text = ctx.message.text?.trim();
-
-  if (user?.awaitingWeight && /^\d+(\.\d+)?$/.test(text)) {
-    const kg = parseFloat(text);
-    const rate = 50; // ₦ per KG
-    const earned = kg * rate;
-    user.waste += kg;
-    user.balance += earned;
-    user.awaitingWeight = false;
-    updateUser(user);
-    return ctx.reply(`✅ You reported ${kg}kg of waste.\n💰 You earned ₦${earned.toFixed(2)}.`);
-  }
-});
-
-// 💰 Withdraw
-bot.action("withdraw", (ctx) => {
-  const user = findUser(ctx.from.id);
-  if (!user || !user.verified) return ctx.reply("Please verify first.");
-  ctx.reply("💳 Enter amount to withdraw:");
-  user.awaitingWithdraw = true;
-  updateUser(user);
-});
-
-bot.on('text', (ctx) => {
-  const id = ctx.from.id;
-  const user = findUser(id);
-  const text = ctx.message.text?.trim();
-
-  if (user?.awaitingWithdraw && /^\d+$/.test(text)) {
-    const amt = parseFloat(text);
-    if (amt > user.balance) return ctx.reply("❌ Insufficient balance.");
-    user.awaitingWithdraw = false;
-    updateUser(user);
-    ctx.telegram.sendMessage(process.env.ADMIN_ID, `💰 New withdrawal request:\nUser: @${user.username}\nAmount: ₦${amt}`);
-    return ctx.reply("✅ Withdrawal request sent to admin.");
-  }
-});
-
-// 📊 My Stats
-bot.action("my_stats", (ctx) => {
-  const u = findUser(ctx.from.id);
-  ctx.reply(`📊 Your Stats:\n\n♻️ Total Waste: ${u.waste}kg\n💰 Balance: ₦${u.balance}`);
-});
-
-// 🗣️ Complaint
-bot.action("complain", (ctx) => {
-  const u = findUser(ctx.from.id);
-  u.awaitingComplaint = true;
-  updateUser(u);
-  ctx.reply("📝 Please type your complaint:");
-});
-
-bot.on('text', (ctx) => {
-  const u = findUser(ctx.from.id);
-  if (u?.awaitingComplaint) {
-    u.complaints.push(ctx.message.text);
-    u.awaitingComplaint = false;
-    updateUser(u);
-    ctx.reply("✅ Complaint received. Admin will review it soon.");
-    ctx.telegram.sendMessage(process.env.ADMIN_ID, `🗣️ New complaint from @${u.username}:\n${ctx.message.text}`);
-  }
-});
-
-// 👑 Admin commands
-bot.command("admin", (ctx) => {
+// === ADMIN COMMANDS ===
+bot.command('admin', (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
-  ctx.reply("👑 Admin Commands:\n\n/users - View all users\n/stats - View summary");
+  ctx.reply(
+    '🛠 *Admin Panel*',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('📊 View Users', 'ADMIN_USERS')],
+      [Markup.button.callback('💵 Set Waste Rates', 'ADMIN_RATES')],
+    ])
+  );
 });
 
-bot.command("users", (ctx) => {
+bot.action('ADMIN_USERS', (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
-  const users = readUsers();
-  ctx.reply(`👥 Total Users: ${users.length}`);
-});
-
-bot.command("stats", (ctx) => {
-  if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
-  const users = readUsers();
-  const totalWaste = users.reduce((a, b) => a + (b.waste || 0), 0);
-  const totalPaid = users.reduce((a, b) => a + (b.balance || 0), 0);
-  ctx.reply(`📈 System Stats:\n\nUsers: ${users.length}\nTotal Waste: ${totalWaste}kg\nTotal ₦ Paid: ₦${totalPaid}`);
+  let list = Object.values(users)
+    .map(u => `${u.name || 'NoName'} - ${u.phone || 'N/A'} - ₦${u.balance}`)
+    .join('\n');
+  ctx.reply('📋 *Users List:*\n' + list, { parse_mode: 'Markdown' });
 });
 
 bot.launch();
-console.log("✅ Clean Naija Bot is running...");
+console.log('✅ Clean Naija Bot is running...');
