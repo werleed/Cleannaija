@@ -87,7 +87,7 @@ function message(key, user = {}, params = {}) {
 }
 
 // Mock Twilio module (no external API)
-const mockTwilio = require('./mock-twilio');
+const twilio = require('twilio');
 
 // Create or re-use bot
 if (!TELEGRAM_TOKEN) {
