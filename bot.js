@@ -10,7 +10,7 @@ const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TO
 const VERIFY_SERVICE = process.env.TWILIO_VERIFY_SID;
 
 // === Telegram Setup ===
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 // === Paths ===
 const DATA_DIR = path.join(__dirname, 'data');
@@ -23,9 +23,9 @@ const loadUsers = () => JSON.parse(fs.readFileSync(USERS_FILE));
 const saveUsers = (data) => fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
 const findUser = (id) => loadUsers().find(u => u.telegram_id === id);
 
-// === Admin list (add your Telegram ID) ===
+// === Admin list ===
 const ADMINS = [
-  123456789, // 🔹 replace with your real Telegram user ID
+  123456789, // 🔹 replace with your Telegram ID
 ];
 
 // === Start command ===
@@ -78,7 +78,9 @@ bot.on('contact', async (msg) => {
 // === Handle OTP verification ===
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text.trim();
+  const text = msg.text?.trim();
+  if (!text) return;
+
   const users = loadUsers();
   const user = users.find(u => u.telegram_id === chatId);
 
@@ -136,7 +138,7 @@ bot.on('message', async (msg) => {
     saveUsers(users);
   } else if (user.awaiting_waste && /^\d+(\.\d+)?$/.test(text)) {
     const weight = parseFloat(text);
-    const amount = weight * 120; // ₦120 per kg simulation
+    const amount = weight * 120; // ₦120 per kg
     user.total_waste += weight;
     user.balance += amount;
     delete user.awaiting_waste;
@@ -177,5 +179,10 @@ bot.onText(/\/reset/, (msg) => {
   fs.writeFileSync(USERS_FILE, '[]');
   bot.sendMessage(msg.chat.id, "🧹 All user data reset successfully.");
 });
+
+// === Keep alive for hosting (optional) ===
+setInterval(() => {
+  console.log("⏳ Bot is alive...");
+}, 1000 * 60 * 10);
 
 console.log("🤖 Bot started successfully...");
