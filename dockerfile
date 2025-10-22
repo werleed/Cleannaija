@@ -1,20 +1,20 @@
-# ---- Base Node Image ----
-FROM node:18-alpine
+# Dockerfile
+FROM node:18
 
-# ---- App Directory ----
+# Create app directory
 WORKDIR /app
 
-# ---- Copy Dependencies ----
-COPY package*.json ./
+# copy package files first (cache layer)
+COPY package.json package-lock.json* ./
 
-# ---- Install Production Dependencies ----
-RUN npm install --omit=dev
+# install dependencies (production)
+RUN npm ci --omit=dev || npm install --omit=dev
 
-# ---- Copy Source ----
+# copy rest of the app
 COPY . .
 
-# ---- Expose Port ----
-EXPOSE 3000
+# ensure directories exist
+RUN mkdir -p /app/data /app/uploads && touch /app/data/users.json
 
-# ---- Start the Bot ----
+# expose nothing needed; use Railway env for start
 CMD ["npm", "start"]
