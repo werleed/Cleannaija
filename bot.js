@@ -248,9 +248,7 @@ bot.on('message', async (m) => {
   }
 });
 // --- Keep bot alive on Railway ---
-const express = require('express');
-const fetch = require('node-fetch');
-const app = express();
+const fetch = require('node-fetch'); // only need this new one
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
