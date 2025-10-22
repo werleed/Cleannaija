@@ -1,20 +1,20 @@
-# Use official Node.js 18 runtime
-FROM node:18
+# ---- Base Node Image ----
+FROM node:18-alpine
 
-# Create app directory
+# ---- App Directory ----
 WORKDIR /app
 
-# Copy package.json and package-lock.json if present
+# ---- Copy Dependencies ----
 COPY package*.json ./
 
-# Install dependencies (production)
+# ---- Install Production Dependencies ----
 RUN npm install --omit=dev
 
-# Copy all source code
+# ---- Copy Source ----
 COPY . .
 
-# Ensure data folders exist (redundant because the bot will create them, but okay)
-RUN mkdir -p /app/data /app/data/uploads
+# ---- Expose Port ----
+EXPOSE 3000
 
-# Start the bot
+# ---- Start the Bot ----
 CMD ["npm", "start"]
