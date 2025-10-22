@@ -4,17 +4,17 @@ FROM node:18
 # Create app directory
 WORKDIR /app
 
-# Copy package.json and package-lock if present
+# Copy package.json and package-lock.json if present
 COPY package*.json ./
 
-# Install dependencies (production only)
+# Install dependencies (production)
 RUN npm install --omit=dev
 
 # Copy all source code
 COPY . .
 
-# Create runtime dirs
-RUN mkdir -p /app/data /app/uploads
+# Ensure data folders exist (redundant because the bot will create them, but okay)
+RUN mkdir -p /app/data /app/data/uploads
 
 # Start the bot
 CMD ["npm", "start"]
