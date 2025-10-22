@@ -1,17 +1,17 @@
-# Use Node.js 18
+# Use Node.js 18 LTS
 FROM node:18-alpine
 
-# Set working directory to /app/public
-WORKDIR /app/public
+# Set working directory
+WORKDIR /app
 
-# Copy package.json and install dependencies
+# Copy dependencies
 COPY public/package*.json ./
 RUN npm install --omit=dev
 
-# Copy all files from public folder
+# Copy all code
 COPY public .
 
-# Expose port for Railway (8080)
+# Expose port for Railway health checks
 EXPOSE 8080
 
 # Start the bot
