@@ -1,31 +1,18 @@
-# ---------- Base image ----------
+# Use Node.js 18
 FROM node:18-alpine
 
-# ---------- Working directory ----------
-WORKDIR /app
+# Set working directory to /app/public
+WORKDIR /app/public
 
-# ---------- Copy package files first ----------
-COPY package*.json ./
+# Copy package.json and install dependencies
+COPY public/package*.json ./
+RUN npm install --omit=dev
 
-# ---------- Install dependencies ----------
-# Use --omit=dev for production and include node-fetch@2 for compatibility
-RUN npm install --omit=dev && npm install node-fetch@2
+# Copy all files from public folder
+COPY public .
 
-# ---------- Copy all source code ----------
-COPY . .
-
-# ---------- Environment setup ----------
-ENV NODE_ENV=production
-ENV PORT=8080
-
-# ---------- Expose port ----------
+# Expose port for Railway (8080)
 EXPOSE 8080
 
-# ---------- Health check ----------
-# Railway uses this to verify your container is healthy.
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
-
-# ---------- Prevent duplicate bot instances ----------
-# Create a lock file check before starting bot.js
-CMD ["/bin/sh", "-c", "if [ -f /tmp/bot.lock ]; then echo 'Bot already running, exiting...'; exit 0; else touch /tmp/bot.lock && node bot.js; fi"]
+# Start the bot
+CMD ["npm", "start"]
