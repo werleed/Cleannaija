@@ -4,17 +4,20 @@ FROM node:18
 # Create app directory
 WORKDIR /app
 
-# Copy package.json and package-lock if present
+# Copy package.json & package-lock if present
 COPY package*.json ./
 
-# Install app dependencies (production only)
+# Install dependencies (without dev)
 RUN npm install --omit=dev
 
-# Copy source
+# Copy app source
 COPY . .
 
-# Expose port if you later need (not required for polling bots)
-# EXPOSE 8080
+# Ensure data directories exist and permissions ok
+RUN mkdir -p /app/data /app/uploads && \
+    chown -R node:node /app
+
+USER node
 
 # Start the bot
 CMD ["npm", "start"]
