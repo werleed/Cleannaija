@@ -1,7 +1,7 @@
 {
   "name": "clean-naija-bot",
   "version": "1.0.0",
-  "description": "Clean Naija Telegram Bot with Twilio OTP verification and offline scanning support.",
+  "description": "Clean Naija Telegram Bot with Twilio OTP verification and admin features.",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
