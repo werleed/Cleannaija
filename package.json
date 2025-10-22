@@ -2,8 +2,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js"
-  },
-  ...
+  }
 }
 {
   "name": "clean-naija-bot",
