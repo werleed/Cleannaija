@@ -1,26 +1,24 @@
-# Use official lightweight Node.js image
 FROM node:18-alpine
 
-# Create app directory
+# Create app dir
 WORKDIR /app
 
-# Copy package files first to leverage layer caching
+# copy package information and install dependencies first (cache)
 COPY package.json package-lock.json* ./
 
-# Install deps (no dev dependencies)
-RUN npm ci --omit=dev
+RUN apk add --no-cache --virtual .gyp python3 make g++ \
+ && npm ci --production \
+ && apk del .gyp
 
-# Copy rest of the app
+# copy app
 COPY . .
 
-# Create data dir (persisted by container)
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# ensure data directory exists
+RUN mkdir -p /app/data
 
-# Use non-root user
-USER node
+# port for health check (match code)
+ENV PORT=8080
 
-# Expose health port if needed (telegram uses outgoing)
 EXPOSE 8080
 
-# Start command
-CMD ["node", "bot.js"]
+CMD ["npm", "start"]
